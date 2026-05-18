@@ -3,6 +3,11 @@
         android:label="aeroride"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+
+         <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="AIzaSyANuwPwm1dRFvh_ySIIiW22-dWnUsMrp0k"/>
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
