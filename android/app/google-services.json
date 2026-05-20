@@ -1,32 +1,13 @@
 {
   "project_info": {
-    "project_number": "1022849629642",
-    "project_id": "aeroride-002",
-    "storage_bucket": "aeroride-002.firebasestorage.app"
+    "project_number": "111977761046",
+    "project_id": "aeroride-1",
+    "storage_bucket": "aeroride-1.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:1022849629642:android:996630a14f795d36702333",
-        "android_client_info": {
-          "package_name": "Lish.Labs1"
-        }
-      },
-      "oauth_client": [],
-      "api_key": [
-        {
-          "current_key": "AIzaSyAvW-YOJPfZuXn19Ak97az7T8fh0tXh540"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": []
-        }
-      }
-    },
-    {
-      "client_info": {
-        "mobilesdk_app_id": "1:1022849629642:android:f616f9f735d6e5c8702333",
+        "mobilesdk_app_id": "1:111977761046:android:db4e10e518fa6a3520a837",
         "android_client_info": {
           "package_name": "com.example.aeroride"
         }
@@ -34,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyAvW-YOJPfZuXn19Ak97az7T8fh0tXh540"
+          "current_key": "AIzaSyBalnsra3xJhgaJck3amzvkaKeKtrjaXCs"
         }
       ],
       "services": {

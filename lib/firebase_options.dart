@@ -23,11 +23,20 @@ class DefaultFirebaseOptions {
       case TargetPlatform.android:
         return android;
       case TargetPlatform.iOS:
-        return ios;
+        throw UnsupportedError(
+          'DefaultFirebaseOptions have not been configured for ios - '
+          'you can reconfigure this by running the FlutterFire CLI again.',
+        );
       case TargetPlatform.macOS:
-        return macos;
+        throw UnsupportedError(
+          'DefaultFirebaseOptions have not been configured for macos - '
+          'you can reconfigure this by running the FlutterFire CLI again.',
+        );
       case TargetPlatform.windows:
-        return windows;
+        throw UnsupportedError(
+          'DefaultFirebaseOptions have not been configured for windows - '
+          'you can reconfigure this by running the FlutterFire CLI again.',
+        );
       case TargetPlatform.linux:
         throw UnsupportedError(
           'DefaultFirebaseOptions have not been configured for linux - '
@@ -41,46 +50,19 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyAppnVAsqv89BAJ_t8qJk2IGvxAZltGU7s',
-    appId: '1:1022849629642:web:870111636f4b7990702333',
-    messagingSenderId: '1022849629642',
-    projectId: 'aeroride-002',
-    authDomain: 'aeroride-002.firebaseapp.com',
-    storageBucket: 'aeroride-002.firebasestorage.app',
+    apiKey: 'AIzaSyBjOh2468oU-jC12XhoS7XKVsIripmEI74',
+    appId: '1:111977761046:web:430fd1ffbd27f87a20a837',
+    messagingSenderId: '111977761046',
+    projectId: 'aeroride-1',
+    authDomain: 'aeroride-1.firebaseapp.com',
+    storageBucket: 'aeroride-1.firebasestorage.app',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyAvW-YOJPfZuXn19Ak97az7T8fh0tXh540',
-    appId: '1:1022849629642:android:f616f9f735d6e5c8702333',
-    messagingSenderId: '1022849629642',
-    projectId: 'aeroride-002',
-    storageBucket: 'aeroride-002.firebasestorage.app',
-  );
-
-  static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyDdHhvRDW26XAudlUL9dN4bsVgTG11rw4w',
-    appId: '1:1022849629642:ios:68dde487767d6670702333',
-    messagingSenderId: '1022849629642',
-    projectId: 'aeroride-002',
-    storageBucket: 'aeroride-002.firebasestorage.app',
-    iosBundleId: 'com.example.aeroride',
-  );
-
-  static const FirebaseOptions macos = FirebaseOptions(
-    apiKey: 'AIzaSyDdHhvRDW26XAudlUL9dN4bsVgTG11rw4w',
-    appId: '1:1022849629642:ios:68dde487767d6670702333',
-    messagingSenderId: '1022849629642',
-    projectId: 'aeroride-002',
-    storageBucket: 'aeroride-002.firebasestorage.app',
-    iosBundleId: 'com.example.aeroride',
-  );
-
-  static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyAppnVAsqv89BAJ_t8qJk2IGvxAZltGU7s',
-    appId: '1:1022849629642:web:14ec5732b0f53f0c702333',
-    messagingSenderId: '1022849629642',
-    projectId: 'aeroride-002',
-    authDomain: 'aeroride-002.firebaseapp.com',
-    storageBucket: 'aeroride-002.firebasestorage.app',
+    apiKey: 'AIzaSyBalnsra3xJhgaJck3amzvkaKeKtrjaXCs',
+    appId: '1:111977761046:android:db4e10e518fa6a3520a837',
+    messagingSenderId: '111977761046',
+    projectId: 'aeroride-1',
+    storageBucket: 'aeroride-1.firebasestorage.app',
   );
 }

@@ -1,0 +1,58 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+class RideRequest {
+  final String? id;
+  final String userId;
+  final String? driverId;
+  final List<String>? candidateDrivers;
+  final GeoPoint pickupLocation;
+  final GeoPoint destinationLocation;
+  final String pickupAddress;
+  final String destinationAddress;
+  final String status;
+  final double estimatedCost;
+
+  RideRequest({
+    this.id,
+    required this.userId,
+    this.driverId,
+    this.candidateDrivers,
+    required this.pickupLocation,
+    required this.destinationLocation,
+    required this.pickupAddress,
+    required this.destinationAddress,
+    required this.status,
+    required this.estimatedCost,
+  });
+
+  factory RideRequest.fromMap(Map<String, dynamic> map, String docId) {
+    return RideRequest(
+      id: docId,
+      userId: map['userId'] ?? '',
+      driverId: map['driverId'],
+      candidateDrivers: map['candidateDrivers'] != null
+          ? List<String>.from(map['candidateDrivers'])
+          : null,
+      pickupLocation: map['pickupLocation'] as GeoPoint,
+      destinationLocation: map['destinationLocation'] as GeoPoint,
+      pickupAddress: map['pickupAddress'] ?? '',
+      destinationAddress: map['destinationAddress'] ?? '',
+      status: map['status'] ?? 'searching',
+      estimatedCost: (map['estimatedCost'] as num).toDouble(),
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'userId': userId,
+      'driverId': driverId,
+      'candidateDrivers': candidateDrivers,
+      'pickupLocation': pickupLocation,
+      'destinationLocation': destinationLocation,
+      'pickupAddress': pickupAddress,
+      'destinationAddress': destinationAddress,
+      'status': status,
+      'estimatedCost': estimatedCost,
+    };
+  }
+}
