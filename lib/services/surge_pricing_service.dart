@@ -53,8 +53,60 @@ class SurgePricingService {
     required LatLng pickup,
     GeofencedZone? zone,
   }) async {
-    final activeZone = zone ?? fallbackZone;
-    if (!_isWithinZone(pickup, activeZone)) {
+    try {
+      final activeZone = zone ?? fallbackZone;
+      if (!_isWithinZone(pickup, activeZone)) {
+        return SurgeQuote(
+          baseFare: baseFare,
+          multiplier: 1.0,
+          finalFare: baseFare,
+          ridersRequesting: 0,
+          driversOnline: 0,
+          zoneId: activeZone.id,
+        );
+      }
+
+      final ridersRequesting = await _countRidersRequesting(activeZone);
+      final driversOnline = await _countDriversOnline(activeZone);
+
+      if (driversOnline <= 0) {
+        return SurgeQuote(
+          baseFare: baseFare,
+          multiplier: activeZone.maxMultiplier,
+          finalFare: baseFare * activeZone.maxMultiplier,
+          ridersRequesting: ridersRequesting,
+          driversOnline: 0,
+          zoneId: activeZone.id,
+        );
+      }
+
+      final ratio = ridersRequesting / driversOnline;
+      if (ratio <= activeZone.requestToDriverThreshold) {
+        return SurgeQuote(
+          baseFare: baseFare,
+          multiplier: 1.0,
+          finalFare: baseFare,
+          ridersRequesting: ridersRequesting,
+          driversOnline: driversOnline,
+          zoneId: activeZone.id,
+        );
+      }
+
+      final multiplier =
+          (1 + ((ratio - activeZone.requestToDriverThreshold) * 0.5))
+              .clamp(1.0, activeZone.maxMultiplier)
+              .toDouble();
+
+      return SurgeQuote(
+        baseFare: baseFare,
+        multiplier: multiplier,
+        finalFare: baseFare * multiplier,
+        ridersRequesting: ridersRequesting,
+        driversOnline: driversOnline,
+        zoneId: activeZone.id,
+      );
+    } catch (_) {
+      final activeZone = zone ?? fallbackZone;
       return SurgeQuote(
         baseFare: baseFare,
         multiplier: 1.0,
@@ -64,46 +116,6 @@ class SurgePricingService {
         zoneId: activeZone.id,
       );
     }
-
-    final ridersRequesting = await _countRidersRequesting(activeZone);
-    final driversOnline = await _countDriversOnline(activeZone);
-
-    if (driversOnline <= 0) {
-      return SurgeQuote(
-        baseFare: baseFare,
-        multiplier: activeZone.maxMultiplier,
-        finalFare: baseFare * activeZone.maxMultiplier,
-        ridersRequesting: ridersRequesting,
-        driversOnline: 0,
-        zoneId: activeZone.id,
-      );
-    }
-
-    final ratio = ridersRequesting / driversOnline;
-    if (ratio <= activeZone.requestToDriverThreshold) {
-      return SurgeQuote(
-        baseFare: baseFare,
-        multiplier: 1.0,
-        finalFare: baseFare,
-        ridersRequesting: ridersRequesting,
-        driversOnline: driversOnline,
-        zoneId: activeZone.id,
-      );
-    }
-
-    final multiplier =
-        (1 + ((ratio - activeZone.requestToDriverThreshold) * 0.5))
-            .clamp(1.0, activeZone.maxMultiplier)
-            .toDouble();
-
-    return SurgeQuote(
-      baseFare: baseFare,
-      multiplier: multiplier,
-      finalFare: baseFare * multiplier,
-      ridersRequesting: ridersRequesting,
-      driversOnline: driversOnline,
-      zoneId: activeZone.id,
-    );
   }
 
   bool _isWithinZone(LatLng point, GeofencedZone zone) {
@@ -122,13 +134,13 @@ class SurgePricingService {
     );
     final snapshot = await _db
         .collection('drivers')
-        .where('isOnline', isEqualTo: true)
         .where('updatedAt', isGreaterThan: cutoff)
         .get();
 
     var count = 0;
     for (final doc in snapshot.docs) {
       final data = doc.data();
+      if (data['isOnline'] != true) continue;
       final location = data['current_location'] as GeoPoint?;
       if (location == null) continue;
       if (_isWithinZone(LatLng(location.latitude, location.longitude), zone)) {
@@ -145,13 +157,13 @@ class SurgePricingService {
     );
     final snapshot = await _db
         .collection('rides')
-        .where('status', isEqualTo: 'searching')
         .where('createdAt', isGreaterThan: cutoff)
         .get();
 
     var count = 0;
     for (final doc in snapshot.docs) {
       final data = doc.data();
+      if (data['status'] != 'searching') continue;
       final pickup = data['pickupLocation'] as GeoPoint?;
       if (pickup == null) continue;
       if (_isWithinZone(LatLng(pickup.latitude, pickup.longitude), zone)) {

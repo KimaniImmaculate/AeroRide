@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'firebase_options.dart';
 import 'theme/aeroride_theme.dart';
+import 'services/notification_service.dart';
 import 'services/auth_service.dart';
 import 'screens/role_selection_screen.dart';
 import 'screens/views/rider_dashboard_view.dart';
@@ -12,6 +13,7 @@ import 'screens/views/driver_dashboard_view.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await NotificationService().init();
   runApp(const AeroRideApp());
 }
 

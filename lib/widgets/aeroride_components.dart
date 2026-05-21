@@ -260,9 +260,9 @@ class AeroRideRideTypeCard extends StatelessWidget {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        width: 154,
-        height: 98,
-        padding: const EdgeInsets.all(10),
+        width: 150,
+        height: 88,
+        padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
           color: selected ? const Color(0xFFF8FBFF) : Colors.white,
           borderRadius: BorderRadius.circular(20),
@@ -275,15 +275,15 @@ class AeroRideRideTypeCard extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon, color: tokens.primaryDarkBlue, size: 22),
-            const SizedBox(height: 6),
+            Icon(icon, color: tokens.primaryDarkBlue, size: 21),
+            const SizedBox(height: 4),
             Text(
               title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
             ),
-            const SizedBox(height: 2),
+            const SizedBox(height: 0),
             Text(
               price,
               maxLines: 1,
@@ -291,15 +291,15 @@ class AeroRideRideTypeCard extends StatelessWidget {
               style: TextStyle(
                 color: tokens.primaryDarkBlue,
                 fontWeight: FontWeight.w800,
-                fontSize: 15,
+                fontSize: 14,
               ),
             ),
-            const SizedBox(height: 1),
+            const SizedBox(height: 0),
             Text(
               eta,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 11),
             ),
           ],
         ),
@@ -531,7 +531,7 @@ class AeroRideTipSelector extends StatelessWidget {
                   ),
                   child: Center(
                     child: Text(
-                      '\$${tip.toStringAsFixed(0)}',
+                      'KES ${tip.toStringAsFixed(0)}',
                       style: TextStyle(
                         color: tip == selectedTip
                             ? Colors.white

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../models/ride_request_model.dart';
@@ -47,14 +48,21 @@ class FirestoreService {
     final snapshot = await _db
         .collection('rides')
         .where('userId', isEqualTo: userId)
-        .orderBy('createdAt', descending: true)
         .limit(limit)
         .get()
         .timeout(const Duration(seconds: 12));
 
-    return snapshot.docs
+    final rides = snapshot.docs
         .map((doc) => RideRequest.fromMap(doc.data(), doc.id))
         .toList();
+
+    rides.sort((a, b) {
+      final aTime = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bTime = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return bTime.compareTo(aTime);
+    });
+
+    return rides.take(limit).toList();
   }
 
   // CREATE: Post a new ride request document to Firestore
@@ -75,35 +83,46 @@ class FirestoreService {
     required String riderId,
     required double fare,
   }) async {
-    return _db.runTransaction((tx) async {
-      final rideRef = _db.collection('rides').doc();
-      final walletRef = _db.collection('wallets').doc(riderId);
-      final walletSnapshot = await tx.get(walletRef);
-      final walletData = walletSnapshot.data();
-      final balance = (walletData?['balance'] as num?)?.toDouble() ?? 0.0;
-      final reservedBalance =
-          (walletData?['reservedBalance'] as num?)?.toDouble() ?? 0.0;
+    final rideRef = _db.collection('rides').doc();
 
-      if (balance < fare) {
-        throw Exception('Insufficient wallet balance');
-      }
+    try {
+      return await _db.runTransaction((tx) async {
+        tx.set(rideRef, {
+          ...rideRequest.toMap(),
+          'estimatedCost': fare,
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+          'paymentStatus': 'pending',
+        });
 
-      tx.set(rideRef, {
-        ...rideRequest.toMap(),
-        'estimatedCost': fare,
-        'createdAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-        'paymentStatus': 'reserved',
+        return rideRef.id;
       });
+    } catch (e, st) {
+      debugPrint('FirestoreService: transaction ride reservation failed: $e');
+      try {
+        final dynamic boxedError = e;
+        debugPrint('FirestoreService: boxed JS error: ${boxedError.error}');
+        debugPrint('FirestoreService: boxed JS stack: ${boxedError.stack}');
+      } catch (_) {
+        // Not a boxed JS object.
+      }
+      debugPrintStack(
+        stackTrace: st,
+        label: 'FirestoreService.createRideRequestWithWalletReservation',
+      );
 
-      tx.set(walletRef, {
-        'balance': balance - fare,
-        'reservedBalance': reservedBalance + fare,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      await rideRef
+          .set({
+            ...rideRequest.toMap(),
+            'estimatedCost': fare,
+            'createdAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+            'paymentStatus': 'pending',
+          })
+          .timeout(const Duration(seconds: 12));
 
       return rideRef.id;
-    });
+    }
   }
 
   // STREAM: Real-time tracking of a ride request document
@@ -214,13 +233,15 @@ class FirestoreService {
       final amount = (rideData['estimatedCost'] as num?)?.toDouble() ?? fare;
       final riderWalletSnapshot = await tx.get(riderWalletRef);
       final riderWalletData = riderWalletSnapshot.data();
-      final reservedBalance =
-          (riderWalletData?['reservedBalance'] as num?)?.toDouble() ?? 0.0;
+      final riderBalance =
+          (riderWalletData?['balance'] as num?)?.toDouble() ?? 0.0;
 
       final driverWalletSnapshot = await tx.get(driverWalletRef);
       final driverWalletData = driverWalletSnapshot.data();
       final driverBalance =
           (driverWalletData?['balance'] as num?)?.toDouble() ?? 0.0;
+
+      final newRiderBalance = riderBalance - amount;
 
       tx.update(rideRef, {
         'status': 'completed',
@@ -229,9 +250,7 @@ class FirestoreService {
       });
 
       tx.set(riderWalletRef, {
-        'reservedBalance': reservedBalance >= amount
-            ? reservedBalance - amount
-            : 0.0,
+        'balance': newRiderBalance,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
@@ -292,7 +311,7 @@ class FirestoreService {
         .snapshots()
         .map(
           (snapshot) => snapshot.docs
-              .map((doc) => RideTypeModel.fromMap(doc.data()!, doc.id))
+              .map((doc) => RideTypeModel.fromMap(doc.data(), doc.id))
               .toList(),
         );
   }
@@ -304,7 +323,7 @@ class FirestoreService {
         .orderBy('sortOrder')
         .get();
     return snapshot.docs
-        .map((doc) => RideTypeModel.fromMap(doc.data()!, doc.id))
+        .map((doc) => RideTypeModel.fromMap(doc.data(), doc.id))
         .toList();
   }
 

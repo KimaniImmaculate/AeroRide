@@ -69,18 +69,20 @@ class DriversService {
     double lng, {
     double radiusKm = 5.0,
   }) async {
-    final now = DateTime.now();
-    final cutoff = Timestamp.fromDate(now.subtract(const Duration(minutes: 5)));
+    final cutoff = DateTime.now().subtract(const Duration(minutes: 5));
 
     final querySnapshot = await _db
         .collection('drivers')
         .where('isOnline', isEqualTo: true)
-        .where('updatedAt', isGreaterThan: cutoff)
         .get();
 
     final List<Map<String, dynamic>> results = [];
     for (final doc in querySnapshot.docs) {
       final data = doc.data();
+      final updatedAt = data['updatedAt'];
+      if (updatedAt is Timestamp && updatedAt.toDate().isBefore(cutoff)) {
+        continue;
+      }
       if (data['current_location'] == null) continue;
       final GeoPoint gp = data['current_location'];
       final double d = _distanceKm(lat, lng, gp.latitude, gp.longitude);
@@ -108,33 +110,37 @@ class DriversService {
     double maxRadiusKm = 15.0,
     int limit = 5,
   }) async {
-    final seenDriverIds = <String>{};
-    final allResults = <Map<String, dynamic>>[];
+    try {
+      final seenDriverIds = <String>{};
+      final allResults = <Map<String, dynamic>>[];
 
-    for (
-      double radius = initialRadiusKm;
-      radius <= maxRadiusKm;
-      radius += initialRadiusKm
-    ) {
-      final results = await getNearbyDrivers(lat, lng, radiusKm: radius);
-      for (final driver in results) {
-        final driverId = driver['driverId'] as String;
-        if (seenDriverIds.add(driverId)) {
-          allResults.add(driver);
+      for (
+        double radius = initialRadiusKm;
+        radius <= maxRadiusKm;
+        radius += initialRadiusKm
+      ) {
+        final results = await getNearbyDrivers(lat, lng, radiusKm: radius);
+        for (final driver in results) {
+          final driverId = driver['driverId'] as String;
+          if (seenDriverIds.add(driverId)) {
+            allResults.add(driver);
+          }
+        }
+
+        allResults.sort(
+          (a, b) =>
+              (a['distanceKm'] as double).compareTo(b['distanceKm'] as double),
+        );
+
+        if (allResults.length >= limit) {
+          break;
         }
       }
 
-      allResults.sort(
-        (a, b) =>
-            (a['distanceKm'] as double).compareTo(b['distanceKm'] as double),
-      );
-
-      if (allResults.length >= limit) {
-        break;
-      }
+      return allResults.take(limit).toList();
+    } catch (_) {
+      return <Map<String, dynamic>>[];
     }
-
-    return allResults.take(limit).toList();
   }
 
   double _distanceKm(double lat1, double lon1, double lat2, double lon2) {

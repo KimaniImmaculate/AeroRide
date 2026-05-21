@@ -68,7 +68,7 @@ class RideTypesService {
         .snapshots()
         .map(
           (snapshot) => snapshot.docs
-              .map((doc) => RideTypeModel.fromMap(doc.data()!, doc.id))
+              .map((doc) => RideTypeModel.fromMap(doc.data(), doc.id))
               .toList(),
         );
   }
@@ -80,7 +80,7 @@ class RideTypesService {
         .orderBy('sortOrder')
         .get();
     return snapshot.docs
-        .map((doc) => RideTypeModel.fromMap(doc.data()!, doc.id))
+        .map((doc) => RideTypeModel.fromMap(doc.data(), doc.id))
         .toList();
   }
 

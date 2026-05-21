@@ -13,6 +13,25 @@ import '../../services/firestore_service.dart';
 import '../../theme/aeroride_theme.dart';
 import '../../widgets/aeroride_components.dart';
 
+String displayRideStatus(String value) {
+  switch (value.toUpperCase()) {
+    case 'SEARCHING':
+      return 'Searching';
+    case 'ACCEPTED':
+      return 'Driver found';
+    case 'ARRIVED':
+      return 'Arrived';
+    case 'STARTED':
+      return 'In transit';
+    case 'COMPLETED':
+      return 'Completed';
+    case 'CANCELLED':
+      return 'Cancelled';
+    default:
+      return value;
+  }
+}
+
 class DriverHomeScreen extends StatefulWidget {
   final User user;
 
@@ -185,15 +204,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         );
 
         if (distanceToDestination <= 250) {
-          await _firestoreService.completeRideAndSettlePayment(
-            rideId: rideId,
-            riderId: ride.userId,
-            driverId: widget.user.uid,
-            fare: ride.estimatedCost,
-          );
-          _arrivalWatcher?.cancel();
           if (mounted) {
-            setState(() => _panelIndex = 2);
+            setState(() => _panelIndex = 1);
           }
         }
       }
@@ -225,35 +237,43 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-              child: Wrap(
-                spacing: 10,
-                runSpacing: 10,
+              child: Row(
                 children: [
-                  AeroRidePillButton(
-                    label: _isOnline ? 'Online' : 'Offline',
-                    selected: _isOnline,
-                    onTap: _busy ? null : _toggleOnline,
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Driver dashboard',
+                        style: TextStyle(
+                          color: context.aeroTokens.primaryDarkBlue,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      Text(
+                        _isOnline ? 'Receiving trips' : 'Offline',
+                        style: TextStyle(
+                          color: _isOnline
+                              ? context.aeroTokens.successGreen
+                              : Colors.grey.shade600,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ),
-                  AeroRidePillButton(
-                    label: 'Queue',
-                    selected: _panelIndex == 0,
-                    onTap: _isOnline
-                        ? () => setState(() => _panelIndex = 0)
-                        : null,
-                  ),
-                  AeroRidePillButton(
-                    label: 'Journey',
-                    selected: _panelIndex == 1,
-                    onTap: _trackedRideId == null && _isOnline
-                        ? () => setState(() => _panelIndex = 1)
-                        : null,
-                  ),
-                  AeroRidePillButton(
-                    label: 'Arrival',
-                    selected: _panelIndex == 2,
-                    onTap: _trackedRideId == null && _isOnline
-                        ? () => setState(() => _panelIndex = 2)
-                        : null,
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: _busy ? null : _toggleOnline,
+                    style: TextButton.styleFrom(
+                      foregroundColor: _isOnline
+                          ? context.aeroTokens.successGreen
+                          : context.aeroTokens.primaryDarkBlue,
+                    ),
+                    icon: Icon(
+                      _isOnline ? Icons.toggle_on : Icons.toggle_off,
+                      size: 30,
+                    ),
+                    label: Text(_isOnline ? 'Online' : 'Offline'),
                   ),
                 ],
               ),
@@ -312,13 +332,63 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                         driverId: widget.user.uid,
                         onRideDetected: _attachActiveRide,
                         onCompleteRide: (rideId) async {
-                          await _firestoreService.updateRideStatus(
-                            rideId,
-                            'completed',
+                          final rideSnapshot = await FirebaseFirestore.instance
+                              .collection('rides')
+                              .doc(rideId)
+                              .get();
+                          if (!rideSnapshot.exists ||
+                              rideSnapshot.data() == null) {
+                            return;
+                          }
+
+                          final ride = RideRequest.fromMap(
+                            rideSnapshot.data()!,
+                            rideSnapshot.id,
+                          );
+                          await _firestoreService.completeRideAndSettlePayment(
+                            rideId: rideId,
+                            riderId: ride.userId,
+                            driverId: widget.user.uid,
+                            fare: ride.estimatedCost,
                           );
                         },
                       ),
               ),
+            ),
+          ],
+        ),
+      ),
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: NavigationBar(
+          selectedIndex: _panelIndex,
+          onDestinationSelected: (index) {
+            if (index == 0) {
+              if (_isOnline) {
+                setState(() => _panelIndex = index);
+              }
+              return;
+            }
+
+            if (_isOnline && _trackedRideId == null) {
+              setState(() => _panelIndex = index);
+            }
+          },
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.inbox_outlined),
+              selectedIcon: Icon(Icons.inbox),
+              label: 'Queue',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.navigation_outlined),
+              selectedIcon: Icon(Icons.navigation),
+              label: 'Journey',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.verified_outlined),
+              selectedIcon: Icon(Icons.verified),
+              label: 'Arrival',
             ),
           ],
         ),
@@ -403,6 +473,25 @@ class _DriverRequestPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = context.aeroTokens;
+    String displayStatus(String value) {
+      switch (value.toUpperCase()) {
+        case 'SEARCHING':
+          return 'Searching';
+        case 'ACCEPTED':
+          return 'Driver found';
+        case 'ARRIVED':
+          return 'Arrived';
+        case 'STARTED':
+          return 'In transit';
+        case 'COMPLETED':
+          return 'Completed';
+        case 'CANCELLED':
+          return 'Cancelled';
+        default:
+          return value;
+      }
+    }
+
     return StreamBuilder<List<RideRequest>>(
       stream: firestoreService.watchDriverRequests(driverId),
       builder: (context, snapshot) {
@@ -491,7 +580,7 @@ class _DriverRequestPanel extends StatelessWidget {
                                 child: AeroRideMetricCard(
                                   label: 'Fare',
                                   value:
-                                      '\$${ride.estimatedCost.toStringAsFixed(2)}',
+                                      'KES ${ride.estimatedCost.toStringAsFixed(2)}',
                                 ),
                               ),
                               const SizedBox(width: 10),
@@ -642,15 +731,13 @@ class _DriverNavigationPanel extends StatelessWidget {
                 : rideStatus == 'ARRIVED'
                 ? 'Start Trip'
                 : rideStatus == 'STARTED'
-                ? 'Complete Trip'
+                ? 'Waiting for rider confirmation'
                 : 'Journey Complete';
 
             final nextStatus = rideStatus == 'ACCEPTED'
                 ? 'arrived'
                 : rideStatus == 'ARRIVED'
                 ? 'started'
-                : rideStatus == 'STARTED'
-                ? 'completed'
                 : null;
 
             return AeroRideMapShell(
@@ -681,7 +768,7 @@ class _DriverNavigationPanel extends StatelessWidget {
                   top: 16,
                   right: 16,
                   child: AeroRideStatusPill(
-                    label: rideStatus,
+                    label: displayRideStatus(rideStatus),
                     color: tokens.warningOrange,
                   ),
                 ),
@@ -705,7 +792,7 @@ class _DriverNavigationPanel extends StatelessWidget {
                               ),
                               const SizedBox(height: 8),
                               Text(
-                                'Fare \$${activeRide.estimatedCost.toStringAsFixed(2)}',
+                                'Fare KES ${activeRide.estimatedCost.toStringAsFixed(2)}',
                                 style: TextStyle(
                                   color: Colors.grey.shade600,
                                   fontWeight: FontWeight.w600,
@@ -900,7 +987,7 @@ class _DriverArrivalPanel extends StatelessWidget {
                   top: 16,
                   left: 16,
                   child: AeroRideStatusPill(
-                    label: activeRide.status.toUpperCase(),
+                    label: displayRideStatus(activeRide.status),
                     color: tokens.successGreen,
                   ),
                 ),
@@ -936,7 +1023,7 @@ class _DriverArrivalPanel extends StatelessWidget {
                                 child: AeroRideMetricCard(
                                   label: 'Fare',
                                   value:
-                                      '\$${activeRide.estimatedCost.toStringAsFixed(2)}',
+                                      'KES ${activeRide.estimatedCost.toStringAsFixed(2)}',
                                 ),
                               ),
                             ],

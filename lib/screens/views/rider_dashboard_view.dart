@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:geocoding/geocoding.dart';
@@ -10,6 +11,7 @@ import '../../models/ride_request_model.dart';
 import '../../models/user_model.dart';
 import '../../services/firestore_service.dart';
 import '../../theme/aeroride_theme.dart';
+import '../../utils/currency.dart';
 import '../../widgets/aeroride_components.dart';
 
 class RiderHomeScreen extends StatefulWidget {
@@ -40,6 +42,13 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   void initState() {
     super.initState();
     _rideController = RideController();
+    unawaited(_rideController.startRiderLocationTracking());
+    _rideController.onDriverArrived = (driverName, vehicleInfo) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$driverName has arrived ($vehicleInfo)')),
+      );
+    };
     _rideController.addListener(_syncPanelWithRideState);
   }
 
@@ -61,8 +70,57 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
       setState(() => _panelIndex = 1);
     }
 
+    if (_rideController.activeRideId != null &&
+        status == 'STARTED' &&
+        _rideController.driverDistanceKm <= 0.25 &&
+        _panelIndex != 2) {
+      setState(() => _panelIndex = 2);
+    }
+
     if (status == 'COMPLETED' && _panelIndex != 2) {
       setState(() => _panelIndex = 2);
+    }
+  }
+
+  Future<void> _confirmRideAndPay() async {
+    final rideId = _rideController.activeRideId;
+    if (rideId == null ||
+        _rideController.currentRideStatus.toUpperCase() != 'STARTED') {
+      return;
+    }
+
+    try {
+      final rideSnapshot = await FirebaseFirestore.instance
+          .collection('rides')
+          .doc(rideId)
+          .get();
+      final rideData = rideSnapshot.data();
+      if (!rideSnapshot.exists || rideData == null) {
+        return;
+      }
+
+      final ride = RideRequest.fromMap(rideData, rideSnapshot.id);
+      if (ride.driverId == null) {
+        return;
+      }
+
+      await _firestoreService.completeRideAndSettlePayment(
+        rideId: rideId,
+        riderId: widget.user.uid,
+        driverId: ride.driverId!,
+        fare: ride.estimatedCost,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Ride confirmed and payment sent.')),
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not confirm ride: $error')));
     }
   }
 
@@ -121,6 +179,31 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           _destinationPlaceSubtitle = _formatLocation(location);
         }
       });
+    }
+  }
+
+  Future<void> _useMyLocationAsPickup() async {
+    final riderLocation = _rideController.riderLocation;
+    if (riderLocation == null || _requestingRide) return;
+
+    setState(() {
+      _pickup = riderLocation;
+      _pickupPlaceName = 'My current location';
+      _pickupPlaceSubtitle = _formatLocation(riderLocation);
+      _selectingPickup = false;
+    });
+
+    _updatePreviewMarkers();
+
+    try {
+      final placeName = await _resolvePlaceName(riderLocation);
+      if (!mounted) return;
+      setState(() {
+        _pickupPlaceName = placeName;
+        _pickupPlaceSubtitle = _formatLocation(riderLocation);
+      });
+    } catch (_) {
+      // Keep the fallback label.
     }
   }
 
@@ -206,6 +289,11 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
         pickupText: _pickupPlaceName ?? _formatLocation(_pickup!),
         dropoffText: _destinationPlaceName ?? _formatLocation(_destination!),
         candidateDriverIds: null,
+        rideType: _selectedRideTypeIndex == 0
+            ? 'economy'
+            : _selectedRideTypeIndex == 2
+            ? 'premium'
+            : 'standard',
       );
 
       final requestFailed = _rideController.activeRideId == null;
@@ -247,30 +335,27 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                   child: Row(
                     children: [
-                      Expanded(
-                        child: Wrap(
-                          spacing: 10,
-                          runSpacing: 10,
-                          children: [
-                            AeroRidePillButton(
-                              label: 'Request',
-                              selected: _panelIndex == 0,
-                              onTap: () => setState(() => _panelIndex = 0),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'AeroRide',
+                            style: TextStyle(
+                              color: context.aeroTokens.primaryDarkBlue,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w900,
                             ),
-                            AeroRidePillButton(
-                              label: 'Trip',
-                              selected: _panelIndex == 1,
-                              onTap: () => setState(() => _panelIndex = 1),
+                          ),
+                          Text(
+                            'Rider dashboard',
+                            style: TextStyle(
+                              color: Colors.grey.shade600,
+                              fontWeight: FontWeight.w600,
                             ),
-                            AeroRidePillButton(
-                              label: 'Payment',
-                              selected: _panelIndex == 2,
-                              onTap: () => setState(() => _panelIndex = 2),
-                            ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 10),
+                      const Spacer(),
                       Material(
                         color: Colors.white,
                         shape: const CircleBorder(),
@@ -308,7 +393,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                             selectingPickup: _selectingPickup,
                             requestingRide: _requestingRide,
                             onMapTap: _onMapTap,
-                            onProfileTap: _showProfileSheet,
+                            onUseMyLocation: _useMyLocationAsPickup,
                             onRequestRide: _requestRide,
                           )
                         : _panelIndex == 1
@@ -317,11 +402,39 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                             onContinue: () => setState(() => _panelIndex = 2),
                           )
                         : _RideSummaryPanel(
+                            rideController: _rideController,
                             selectedTip: _selectedTip,
                             onTipChanged: (value) =>
                                 setState(() => _selectedTip = value),
+                            onConfirmAndPay: _confirmRideAndPay,
                           ),
                   ),
+                ),
+              ],
+            ),
+          ),
+          bottomNavigationBar: SafeArea(
+            top: false,
+            child: NavigationBar(
+              selectedIndex: _panelIndex,
+              onDestinationSelected: (index) {
+                setState(() => _panelIndex = index);
+              },
+              destinations: const [
+                NavigationDestination(
+                  icon: Icon(Icons.add_location_alt_outlined),
+                  selectedIcon: Icon(Icons.add_location_alt),
+                  label: 'Request',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.route_outlined),
+                  selectedIcon: Icon(Icons.route),
+                  label: 'Trip',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.account_balance_wallet_outlined),
+                  selectedIcon: Icon(Icons.account_balance_wallet),
+                  label: 'Payment',
                 ),
               ],
             ),
@@ -352,12 +465,6 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
             return FutureBuilder<List<dynamic>>(
               future: future,
               builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return _ProfileSheetScaffold(
-                    child: const Center(child: CircularProgressIndicator()),
-                  );
-                }
-
                 if (snapshot.hasError || !snapshot.hasData) {
                   return _ProfileSheetScaffold(
                     child: Center(
@@ -493,7 +600,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                                   ),
                                   const SizedBox(height: 8),
                                   Text(
-                                    'Fare: \$${ride.estimatedCost.toStringAsFixed(2)}',
+                                    'Fare: ${formatKES(ride.estimatedCost)}',
                                     style: TextStyle(
                                       color: Colors.grey.shade700,
                                       fontWeight: FontWeight.w600,
@@ -542,7 +649,7 @@ class _RideRequestPanel extends StatelessWidget {
   final bool selectingPickup;
   final bool requestingRide;
   final ValueChanged<LatLng> onMapTap;
-  final VoidCallback onProfileTap;
+  final VoidCallback onUseMyLocation;
   final VoidCallback onRequestRide;
 
   const _RideRequestPanel({
@@ -556,7 +663,7 @@ class _RideRequestPanel extends StatelessWidget {
     required this.selectingPickup,
     required this.requestingRide,
     required this.onMapTap,
-    required this.onProfileTap,
+    required this.onUseMyLocation,
     required this.onRequestRide,
     this.selectedRideTypeIndex,
     this.onSelectRideType,
@@ -587,14 +694,6 @@ class _RideRequestPanel extends StatelessWidget {
           child: _FloatingIconButton(icon: Icons.menu_rounded, onTap: () {}),
         ),
         Positioned(
-          top: 16,
-          right: 16,
-          child: _FloatingIconButton(
-            icon: Icons.person_outline_rounded,
-            onTap: onProfileTap,
-          ),
-        ),
-        Positioned(
           left: 16,
           right: 16,
           bottom: 0,
@@ -613,15 +712,44 @@ class _RideRequestPanel extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _LocationField(
-                          label: pickup == null
-                              ? 'Tap map to set pickup'
-                              : pickupPlaceName ?? 'Resolving pickup place...',
-                          subtitle: pickup == null
-                              ? null
-                              : pickupPlaceSubtitle ?? _coords(pickup!),
-                          icon: Icons.my_location_rounded,
-                          borderColor: const Color(0xFF10B981),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _LocationField(
+                                label: pickup == null
+                                    ? 'Tap map to set pickup'
+                                    : pickupPlaceName ??
+                                          'Resolving pickup place...',
+                                subtitle: pickup == null
+                                    ? null
+                                    : pickupPlaceSubtitle ?? _coords(pickup!),
+                                icon: Icons.my_location_rounded,
+                                borderColor: const Color(0xFF10B981),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            SizedBox(
+                              height: 56,
+                              child: ElevatedButton.icon(
+                                onPressed: rideController.riderLocation == null
+                                    ? null
+                                    : onUseMyLocation,
+                                icon: const Icon(
+                                  Icons.gps_fixed_rounded,
+                                  size: 18,
+                                ),
+                                label: const Text('Use location'),
+                                style: ElevatedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 12),
                         _LocationField(
@@ -656,7 +784,7 @@ class _RideRequestPanel extends StatelessWidget {
                             children: [
                               AeroRideRideTypeCard(
                                 title: 'Economy',
-                                price: '\$12.50',
+                                price: formatKES(12.50),
                                 eta: '3 min',
                                 icon: Icons.directions_car_filled_rounded,
                                 selected: (selectedRideTypeIndex ?? 1) == 0,
@@ -665,7 +793,7 @@ class _RideRequestPanel extends StatelessWidget {
                               const SizedBox(width: 12),
                               AeroRideRideTypeCard(
                                 title: 'Standard',
-                                price: '\$18.00',
+                                price: formatKES(18.00),
                                 eta: '2 min',
                                 icon: Icons.directions_car_rounded,
                                 selected: (selectedRideTypeIndex ?? 1) == 1,
@@ -674,7 +802,7 @@ class _RideRequestPanel extends StatelessWidget {
                               const SizedBox(width: 12),
                               AeroRideRideTypeCard(
                                 title: 'Premium',
-                                price: '\$28.50',
+                                price: formatKES(28.50),
                                 eta: '4 min',
                                 icon: Icons.directions_car_filled_sharp,
                                 selected: (selectedRideTypeIndex ?? 1) == 2,
@@ -730,6 +858,25 @@ class _RideActivePanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final tokens = context.aeroTokens;
     final status = rideController.currentRideStatus.toUpperCase();
+    String displayStatus(String value) {
+      switch (value) {
+        case 'SEARCHING':
+          return 'Searching';
+        case 'ACCEPTED':
+          return 'Driver found';
+        case 'ARRIVED':
+          return 'Arrived';
+        case 'STARTED':
+          return 'In transit';
+        case 'COMPLETED':
+          return 'Completed';
+        case 'CANCELLED':
+          return 'Cancelled';
+        default:
+          return value.isEmpty ? 'Searching' : value.toLowerCase();
+      }
+    }
+
     final driverName =
         rideController.assignedDriverProfile?.name ?? 'Driver assigning...';
     final vehicle = rideController.driverVehicle ?? 'Vehicle details pending';
@@ -770,7 +917,7 @@ class _RideActivePanel extends StatelessWidget {
           top: 16,
           left: 16,
           child: AeroRideStatusPill(
-            label: status.isEmpty ? 'Searching...' : status.toLowerCase(),
+            label: displayStatus(status),
             color: tokens.successGreen,
           ),
         ),
@@ -778,7 +925,7 @@ class _RideActivePanel extends StatelessWidget {
           top: 16,
           right: 16,
           child: AeroRideStatusPill(
-            label: '1 min',
+            label: rideController.driverEtaLabel,
             color: tokens.warningOrange,
           ),
         ),
@@ -885,16 +1032,16 @@ class _RideActivePanel extends StatelessWidget {
                         Expanded(
                           child: AeroRideMetricCard(
                             label: 'Distance',
-                            value: distance,
+                            value: rideController.driverLocation != null
+                                ? '${rideController.driverDistanceKm.toStringAsFixed(1)} km'
+                                : distance,
                           ),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
                           child: AeroRideMetricCard(
-                            label: 'Fare',
-                            value: rideController.estimatedCost == null
-                                ? '\$18.00'
-                                : '\$${rideController.estimatedCost!.toStringAsFixed(2)}',
+                            label: 'ETA',
+                            value: rideController.driverEtaLabel,
                           ),
                         ),
                       ],
@@ -922,17 +1069,24 @@ class _RideActivePanel extends StatelessWidget {
 }
 
 class _RideSummaryPanel extends StatelessWidget {
+  final RideController rideController;
   final double selectedTip;
   final ValueChanged<double> onTipChanged;
+  final Future<void> Function() onConfirmAndPay;
 
   const _RideSummaryPanel({
+    required this.rideController,
     required this.selectedTip,
     required this.onTipChanged,
+    required this.onConfirmAndPay,
   });
 
   @override
   Widget build(BuildContext context) {
     final tokens = context.aeroTokens;
+    final status = rideController.currentRideStatus.toUpperCase();
+    final baseFare = rideController.estimatedCost ?? 16.5;
+    final total = baseFare + selectedTip;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -942,7 +1096,7 @@ class _RideSummaryPanel extends StatelessWidget {
             children: [
               const Expanded(
                 child: Text(
-                  'Trip Summary',
+                  'Payment & Confirmation',
                   style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.w900,
@@ -953,7 +1107,7 @@ class _RideSummaryPanel extends StatelessWidget {
               TextButton(
                 onPressed: () {},
                 child: const Text(
-                  'Skip',
+                  'Review',
                   style: TextStyle(fontWeight: FontWeight.w800),
                 ),
               ),
@@ -970,7 +1124,7 @@ class _RideSummaryPanel extends StatelessWidget {
                       child: Icon(Icons.person, color: tokens.primaryDarkBlue),
                     ),
                     const SizedBox(width: 12),
-                    const Expanded(
+                    Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -983,8 +1137,10 @@ class _RideSummaryPanel extends StatelessWidget {
                           ),
                           SizedBox(height: 4),
                           Text(
-                            '3.5 km - 15 min - Today',
-                            style: TextStyle(color: Colors.black54),
+                            status == 'STARTED'
+                                ? 'Trip finished? Confirm to pay'
+                                : 'Ready for confirmation',
+                            style: const TextStyle(color: Colors.black54),
                           ),
                         ],
                       ),
@@ -1006,11 +1162,11 @@ class _RideSummaryPanel extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 18),
-                const _BreakdownRow(label: 'Base fare', value: '\$12.00'),
-                const _BreakdownRow(label: 'Service fee', value: '\$2.50'),
-                const _BreakdownRow(
-                  label: 'Subtotal',
-                  value: '\$14.50',
+                _BreakdownRow(label: 'Base fare', value: formatKES(baseFare)),
+                _BreakdownRow(label: 'Tip', value: formatKES(selectedTip)),
+                _BreakdownRow(
+                  label: 'Total',
+                  value: formatKES(total),
                   emphasize: true,
                 ),
               ],
@@ -1033,7 +1189,7 @@ class _RideSummaryPanel extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           Text(
-            'Tip amount: \$${selectedTip.toStringAsFixed(2)}',
+            'Tip amount: ${formatKES(selectedTip)}',
             style: TextStyle(
               color: Colors.grey.shade600,
               fontWeight: FontWeight.w600,
@@ -1068,21 +1224,22 @@ class _RideSummaryPanel extends StatelessWidget {
             color: const Color(0xFFF8FBFF),
             child: Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
+                      const Text(
                         'Total',
                         style: TextStyle(
                           color: Colors.black54,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                      SizedBox(height: 4),
+                      const SizedBox(height: 4),
                       Text(
-                        '\$16.50',
-                        style: TextStyle(
+                        formatKES(16.5),
+                        formatKES(total),
+                        style: const TextStyle(
                           fontSize: 24,
                           fontWeight: FontWeight.w900,
                           color: Color(0xFF0D2B52),
@@ -1094,8 +1251,8 @@ class _RideSummaryPanel extends StatelessWidget {
                 SizedBox(
                   width: 150,
                   child: AeroRidePrimaryButton(
-                    label: 'Pay Now',
-                    onPressed: () {},
+                    label: status == 'STARTED' ? 'Confirm & Pay' : 'Waiting',
+                    onPressed: status == 'STARTED' ? onConfirmAndPay : null,
                   ),
                 ),
               ],

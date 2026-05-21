@@ -125,7 +125,10 @@ class SimulationService {
     debugPrint('SimulationService: Starting ride simulation for ride $rideId');
 
     // 1. Get driver starting location or default to offset
-    LatLng driverStart = LatLng(pickup.latitude + 0.005, pickup.longitude + 0.005);
+    LatLng driverStart = LatLng(
+      pickup.latitude + 0.005,
+      pickup.longitude + 0.005,
+    );
     try {
       final doc = await _db.collection('drivers').doc(driverId).get();
       if (doc.exists && doc.data()?['current_location'] != null) {
@@ -133,20 +136,33 @@ class SimulationService {
         driverStart = LatLng(gp.latitude, gp.longitude);
       }
     } catch (e) {
-      debugPrint('SimulationService: Could not read driver location, using default offset: $e');
+      debugPrint(
+        'SimulationService: Could not read driver location, using default offset: $e',
+      );
     }
 
     // 2. Build coordinates for both legs
     // Leg 1: Driver to pickup (approx. 10 steps)
-    final toPickupPoints = MockRouteService.buildRoutePoints(driverStart, pickup, steps: 10);
+    final toPickupPoints = MockRouteService.buildRoutePoints(
+      driverStart,
+      pickup,
+      steps: 10,
+    );
     // Leg 2: Pickup to destination (approx. 15 steps)
-    final toDestPoints = MockRouteService.buildRoutePoints(pickup, destination, steps: 15);
+    final toDestPoints = MockRouteService.buildRoutePoints(
+      pickup,
+      destination,
+      steps: 15,
+    );
 
     int step = 0;
-    int leg = 1; // 1: moving to pickup, 2: waiting at pickup, 3: moving to destination, 4: completed
+    int leg =
+        1; // 1: moving to pickup, 2: waiting at pickup, 3: moving to destination, 4: completed
     int waitingCounter = 0;
 
-    _rideSimulationTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+    _rideSimulationTimer = Timer.periodic(const Duration(seconds: 1), (
+      timer,
+    ) async {
       try {
         if (leg == 1) {
           // Leg 1: Moving to pickup
@@ -189,13 +205,17 @@ class SimulationService {
             step++;
           } else {
             // Arrived at destination
-            await _db.collection('rides').doc(rideId).update({
-              'status': 'completed',
-            });
+            await _db.collection('drivers').doc(driverId).set({
+              'current_location': GeoPoint(
+                destination.latitude,
+                destination.longitude,
+              ),
+              'updatedAt': Timestamp.now(),
+            }, SetOptions(merge: true));
             leg = 4;
             timer.cancel();
             _rideSimulationTimer = null;
-            debugPrint('SimulationService: Trip completed.');
+            debugPrint('SimulationService: Trip awaiting rider confirmation.');
           }
         }
       } catch (e) {

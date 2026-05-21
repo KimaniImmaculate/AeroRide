@@ -1,17 +1,21 @@
 import 'dart:async';
+import 'dart:math';
+import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:aeroride/models/ride_request_model.dart';
 import 'package:aeroride/utils/location_extensions.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:aeroride/services/firestore_service.dart';
 import 'package:aeroride/services/drivers_service.dart';
 import 'package:aeroride/services/surge_pricing_service.dart';
 import 'package:aeroride/services/simulation_service.dart';
 import 'package:aeroride/models/user_model.dart';
 import 'package:aeroride/models/ride_type_model.dart';
+import 'package:aeroride/services/notification_service.dart';
 
-// Callback type for arrival notifications
 typedef ArrivalCallback = void Function(String driverName, String vehicleInfo);
 
 class RideController extends ChangeNotifier {
@@ -21,6 +25,7 @@ class RideController extends ChangeNotifier {
 
   StreamSubscription<RideRequest>? _rideSubscription;
   StreamSubscription<DocumentSnapshot>? _driverSubscription;
+  StreamSubscription<Position>? _riderPositionSubscription;
 
   Set<Marker> markers = {};
   Set<Polyline> polylines = {};
@@ -29,8 +34,12 @@ class RideController extends ChangeNotifier {
   String currentRideStatus = "IDLE";
   String? activeRideId;
 
+  // Arrival callback for UI to show notifications
+  void Function(String driverName, String vehicleInfo)? onDriverArrived;
+
   // Active locations and assigned profile
   LatLng? driverLocation;
+  LatLng? riderLocation;
   UserModel? assignedDriverProfile;
   LatLng? pickupLocation;
   LatLng? destinationLocation;
@@ -41,12 +50,24 @@ class RideController extends ChangeNotifier {
   // Real-time tracking data
   int driverEtaMinutes = 0;
   double driverDistanceKm = 0.0;
-  ArrivalCallback? onDriverArrived;
 
   // Ride type selection
   List<RideTypeModel> availableRideTypes = [];
   RideTypeModel? selectedRideType;
   String? selectedRideTypeId;
+
+  // Nearby driver previews shown while waiting for assignment.
+  List<Map<String, dynamic>> nearbyDriverPreviews = [];
+
+  BitmapDescriptor? _driverMarkerIcon;
+  BitmapDescriptor? _nearbyDriverMarkerIcon;
+  bool _markerIconsLoading = false;
+
+  String get driverEtaLabel {
+    if (currentRideStatus == 'ARRIVED') return 'Arrived';
+    if (driverEtaMinutes <= 0) return '1 min';
+    return driverEtaMinutes == 1 ? '1 min' : '$driverEtaMinutes min';
+  }
 
   // Core Flow: Triggers a new ride down to Firestore and maps it
   Future<void> requestNewRide({
@@ -57,44 +78,66 @@ class RideController extends ChangeNotifier {
     required String dropoffText,
     List<String>? candidateDriverIds,
     bool autoAssignDriver = false,
+    String rideType = 'standard',
   }) async {
-    // 1. Fetch nearby drivers if not supplied
-    if (candidateDriverIds == null || candidateDriverIds.isEmpty) {
-      try {
+    var stage = 'starting request';
+    final simulationMode = kDebugMode;
+
+    try {
+      currentRideStatus = "REQUESTING...";
+      notifyListeners();
+
+      // 1. Fetch nearby drivers if not supplied
+      stage = 'fetching nearby drivers';
+      if (candidateDriverIds == null || candidateDriverIds.isEmpty) {
         final nearby = await _driversService.getTopNearbyDrivers(
           pickup.latitude,
           pickup.longitude,
           limit: 5,
         );
+        nearbyDriverPreviews = nearby;
         candidateDriverIds = nearby
             .take(5)
             .map((d) => d['driverId'] as String)
             .toList();
-      } catch (_) {
-        candidateDriverIds = null;
+
+        if (candidateDriverIds.isEmpty && simulationMode) {
+          await SimulationService.seedMockDrivers(pickup, count: 5);
+          final simulatedNearby = await _driversService.getTopNearbyDrivers(
+            pickup.latitude,
+            pickup.longitude,
+            limit: 5,
+          );
+          nearbyDriverPreviews = simulatedNearby;
+          candidateDriverIds = simulatedNearby
+              .take(5)
+              .map((d) => d['driverId'] as String)
+              .toList();
+        }
+
+        _updateMarkersAndPolylines();
+        notifyListeners();
       }
-    }
 
-    final surgeQuote = await _surgePricingService.quoteForPickup(
-      baseFare: 12.0,
-      pickup: pickup,
-    );
+      stage = 'quoting surge pricing';
+      final surgeQuote = await _surgePricingService.quoteForPickup(
+        baseFare: 12.0,
+        pickup: pickup,
+      );
 
-    RideRequest newRide = RideRequest(
-      userId: userId,
-      pickupLocation: pickup.toGeoPoint(),
-      destinationLocation: destination.toGeoPoint(),
-      pickupAddress: pickupText,
-      destinationAddress: dropoffText,
-      status: 'searching',
-      estimatedCost: surgeQuote.finalFare,
-      candidateDrivers: candidateDriverIds,
-    );
+      final newRide = RideRequest(
+        userId: userId,
+        pickupLocation: pickup.toGeoPoint(),
+        destinationLocation: destination.toGeoPoint(),
+        pickupAddress: pickupText,
+        destinationAddress: dropoffText,
+        status: 'searching',
+        estimatedCost: surgeQuote.finalFare,
+        candidateDrivers: candidateDriverIds,
+        rideType: rideType,
+      );
 
-    currentRideStatus = "REQUESTING...";
-    notifyListeners();
-
-    try {
+      stage = 'creating ride transaction';
       String rideId = await _firestoreService
           .createRideRequestWithWalletReservation(
             rideRequest: newRide,
@@ -102,10 +145,11 @@ class RideController extends ChangeNotifier {
             fare: surgeQuote.finalFare,
           );
       activeRideId = rideId;
+      final shouldAutoAssign = autoAssignDriver || simulationMode;
 
       // Keep the request visible to drivers unless the caller explicitly wants
       // to auto-assign a candidate driver for simulation flows.
-      if (autoAssignDriver &&
+      if (shouldAutoAssign &&
           newRide.candidateDrivers != null &&
           newRide.candidateDrivers!.isNotEmpty) {
         _autoAssignDriver(rideId, newRide.candidateDrivers!);
@@ -113,10 +157,21 @@ class RideController extends ChangeNotifier {
 
       // Instantly stream updates
       listenToLiveRide(rideId);
-    } catch (e) {
-      currentRideStatus = "ERROR: $e";
+    } catch (e, st) {
+      currentRideStatus = "ERROR: ${e.toString()}";
       notifyListeners();
-      debugPrint("RideController: Error creating ride: $e");
+      debugPrint('RideController: requestNewRide failed at stage: $stage');
+      debugPrint('RideController: generic error: $e');
+      try {
+        final dynamic boxedError = e;
+        final jsError = boxedError.error;
+        final jsStack = boxedError.stack;
+        debugPrint('RideController: boxed JS error: $jsError');
+        debugPrint('RideController: boxed JS stack: $jsStack');
+      } catch (_) {
+        // Not a boxed JS error; ignore.
+      }
+      debugPrintStack(stackTrace: st, label: 'RideController.requestNewRide');
     }
   }
 
@@ -134,6 +189,7 @@ class RideController extends ChangeNotifier {
         .streamRideStatus(rideId)
         .listen(
           (RideRequest liveRide) async {
+            final prevStatus = currentRideStatus;
             currentRideStatus = liveRide.status.toUpperCase();
             pickupLocation = liveRide.pickupLocation.toLatLng();
             destinationLocation = liveRide.destinationLocation.toLatLng();
@@ -168,6 +224,24 @@ class RideController extends ChangeNotifier {
               SimulationService.stopRideSimulation();
             }
 
+            // Notify UI when driver arrives
+            if (prevStatus != 'ARRIVED' && currentRideStatus == 'ARRIVED') {
+              try {
+                final driverName = assignedDriverProfile?.name ?? 'Driver';
+                final vehicle = driverVehicle ?? '';
+                await _sendArrivalNotification(liveRide);
+                if (onDriverArrived != null) {
+                  onDriverArrived!.call(driverName, vehicle);
+                }
+                try {
+                  NotificationService().showLocalNotification(
+                    title: 'Driver Arrived',
+                    body: '$driverName has arrived in $vehicle',
+                  );
+                } catch (_) {}
+              } catch (_) {}
+            }
+
             _updateMarkersAndPolylines();
             _fitCameraToRoute();
             notifyListeners();
@@ -192,12 +266,65 @@ class RideController extends ChangeNotifier {
             final gp = snapshot.data()!['current_location'] as GeoPoint?;
             if (gp != null) {
               driverLocation = gp.toLatLng();
+              // compute ETA and distance
+              try {
+                if (pickupLocation != null) {
+                  final meters = _distanceMeters(
+                    driverLocation!.latitude,
+                    driverLocation!.longitude,
+                    pickupLocation!.latitude,
+                    pickupLocation!.longitude,
+                  );
+                  driverDistanceKm = (meters / 1000.0);
+                  // assume average urban speed 500 m/min (~30 km/h)
+                  driverEtaMinutes = (meters / 500).ceil();
+                }
+                if (destinationLocation != null &&
+                    currentRideStatus == 'STARTED') {
+                  final meters = _distanceMeters(
+                    driverLocation!.latitude,
+                    driverLocation!.longitude,
+                    destinationLocation!.latitude,
+                    destinationLocation!.longitude,
+                  );
+                  driverDistanceKm = (meters / 1000.0);
+                  driverEtaMinutes = (meters / 500).ceil();
+                }
+              } catch (_) {}
+
+              // persist ETA to Firestore for server-side visibility
+              try {
+                if (activeRideId != null) {
+                  _firestoreService.updateDriverEta(
+                    rideId: activeRideId!,
+                    etaMinutes: driverEtaMinutes,
+                    distanceKm: driverDistanceKm,
+                    driverStatus: currentRideStatus.toLowerCase(),
+                  );
+                }
+              } catch (_) {}
+
               _updateMarkersAndPolylines();
               notifyListeners();
             }
           }
         });
   }
+
+  double _distanceMeters(double lat1, double lng1, double lat2, double lng2) {
+    const earthRadius = 6371000.0;
+    final dLat = _degToRad(lat2 - lat1);
+    final dLng = _degToRad(lng2 - lng1);
+    final a =
+        (sin(dLat / 2) * sin(dLat / 2)) +
+        cos(_degToRad(lat1)) *
+            cos(_degToRad(lat2)) *
+            (sin(dLng / 2) * sin(dLng / 2));
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return earthRadius * c;
+  }
+
+  double _degToRad(double degrees) => degrees * (pi / 180);
 
   Future<void> _setupDriverProfile(String driverId) async {
     if (assignedDriverProfile != null &&
@@ -248,7 +375,25 @@ class RideController extends ChangeNotifier {
   }
 
   void _updateMarkersAndPolylines() {
+    if ((_driverMarkerIcon == null || _nearbyDriverMarkerIcon == null) &&
+        !_markerIconsLoading) {
+      unawaited(_loadMarkerIcons());
+    }
+
     markers.clear();
+
+    if (riderLocation != null) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId('rider'),
+          position: riderLocation!,
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueAzure,
+          ),
+          infoWindow: const InfoWindow(title: 'Your location'),
+        ),
+      );
+    }
 
     if (pickupLocation != null) {
       markers.add(
@@ -279,7 +424,9 @@ class RideController extends ChangeNotifier {
         Marker(
           markerId: const MarkerId('driver'),
           position: driverLocation!,
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+          icon:
+              _driverMarkerIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
           infoWindow: InfoWindow(
             title: assignedDriverProfile?.name ?? "Driver",
             snippet: currentRideStatus == 'ACCEPTED'
@@ -292,37 +439,134 @@ class RideController extends ChangeNotifier {
       );
     }
 
-    polylines.clear();
-    if (pickupLocation != null && destinationLocation != null) {
-      if (currentRideStatus == 'ACCEPTED' && driverLocation != null) {
-        polylines.add(
-          Polyline(
-            polylineId: const PolylineId('driver_to_pickup'),
-            points: [driverLocation!, pickupLocation!],
-            color: Colors.orange,
-            width: 5,
-          ),
-        );
-      } else if (currentRideStatus == 'STARTED' && driverLocation != null) {
-        polylines.add(
-          Polyline(
-            polylineId: const PolylineId('driver_to_destination'),
-            points: [driverLocation!, destinationLocation!],
-            color: Colors.blue,
-            width: 5,
-          ),
-        );
-      } else {
-        polylines.add(
-          Polyline(
-            polylineId: const PolylineId('route'),
-            points: [pickupLocation!, destinationLocation!],
-            color: Colors.blue.withValues(alpha: 0.5),
-            width: 4,
+    if ((currentRideStatus == 'REQUESTING...' ||
+            currentRideStatus == 'SEARCHING') &&
+        nearbyDriverPreviews.isNotEmpty) {
+      for (var index = 0; index < nearbyDriverPreviews.length; index++) {
+        final preview = nearbyDriverPreviews[index];
+        final location = preview['location'] as LatLng?;
+        if (location == null) continue;
+        markers.add(
+          Marker(
+            markerId: MarkerId('candidate_driver_$index'),
+            position: location,
+            icon:
+                _nearbyDriverMarkerIcon ??
+                BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueOrange,
+                ),
+            infoWindow: const InfoWindow(title: 'Nearby driver'),
           ),
         );
       }
     }
+
+    polylines.clear();
+  }
+
+  Future<void> _loadMarkerIcons() async {
+    _markerIconsLoading = true;
+    try {
+      _driverMarkerIcon = await _buildVehicleMarkerIcon(
+        background: const Color(0xFF0D2B52),
+        icon: Icons.directions_car_rounded,
+      );
+      _nearbyDriverMarkerIcon = await _buildVehicleMarkerIcon(
+        background: const Color(0xFFFF8A00),
+        icon: Icons.directions_car_filled_rounded,
+      );
+      _updateMarkersAndPolylines();
+      notifyListeners();
+    } catch (e) {
+      debugPrint('RideController: Failed to build vehicle markers: $e');
+    } finally {
+      _markerIconsLoading = false;
+    }
+  }
+
+  Future<BitmapDescriptor> _buildVehicleMarkerIcon({
+    required Color background,
+    required IconData icon,
+  }) async {
+    const size = 144.0;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final center = const Offset(size / 2, size / 2);
+    final radius = size / 2;
+
+    final shadowPaint = Paint()
+      ..color = Colors.black.withValues(alpha: 0.22)
+      ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 10);
+    canvas.drawCircle(center.translate(0, 5), radius * 0.74, shadowPaint);
+
+    final circlePaint = Paint()..color = background;
+    canvas.drawCircle(center, radius * 0.72, circlePaint);
+
+    final iconSpan = TextSpan(
+      text: String.fromCharCode(icon.codePoint),
+      style: TextStyle(
+        fontFamily: icon.fontFamily,
+        package: icon.fontPackage,
+        fontSize: 70,
+        color: Colors.white,
+      ),
+    );
+    final painter = TextPainter(
+      text: iconSpan,
+      textDirection: ui.TextDirection.ltr,
+    )..layout();
+    painter.paint(
+      canvas,
+      Offset(center.dx - painter.width / 2, center.dy - painter.height / 2),
+    );
+
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(size.toInt(), size.toInt());
+    final data = await image.toByteData(format: ui.ImageByteFormat.png);
+    return BitmapDescriptor.fromBytes(data!.buffer.asUint8List());
+  }
+
+  Future<void> startRiderLocationTracking() async {
+    if (_riderPositionSubscription != null) return;
+
+    try {
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.deniedForever ||
+          permission == LocationPermission.denied) {
+        debugPrint('RideController: rider location permission denied');
+        return;
+      }
+
+      final current = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.bestForNavigation,
+      );
+      riderLocation = LatLng(current.latitude, current.longitude);
+      _updateMarkersAndPolylines();
+      notifyListeners();
+
+      _riderPositionSubscription =
+          Geolocator.getPositionStream(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.bestForNavigation,
+              distanceFilter: 10,
+            ),
+          ).listen((Position position) {
+            riderLocation = LatLng(position.latitude, position.longitude);
+            _updateMarkersAndPolylines();
+            notifyListeners();
+          });
+    } catch (e) {
+      debugPrint('RideController: Failed to start rider tracking: $e');
+    }
+  }
+
+  Future<void> stopRiderLocationTracking() async {
+    await _riderPositionSubscription?.cancel();
+    _riderPositionSubscription = null;
   }
 
   void _fitCameraToRoute() {
@@ -402,10 +646,10 @@ class RideController extends ChangeNotifier {
   }
 
   Future<void> _sendArrivalNotification(RideRequest ride) async {
-    if (ride.driverId == null) return;
+    if (ride.driverId == null || ride.id == null) return;
 
     try {
-      final driverDoc = await _firestoreService._db
+      final driverDoc = await FirebaseFirestore.instance
           .collection('drivers')
           .doc(ride.driverId)
           .get();
@@ -421,11 +665,8 @@ class RideController extends ChangeNotifier {
         riderId: ride.userId,
         driverName: driverName,
         vehicleInfo: vehicleInfo.isEmpty ? 'the vehicle' : vehicleInfo,
-        rideId: ride.id,
+        rideId: ride.id!,
       );
-
-      // Call the local callback if set
-      onDriverArrived?.call(driverName, vehicleInfo);
     } catch (e) {
       debugPrint('RideController: Failed to send arrival notification: $e');
     }
@@ -480,6 +721,7 @@ class RideController extends ChangeNotifier {
     currentRideStatus = "IDLE";
     activeRideId = null;
     driverLocation = null;
+    nearbyDriverPreviews = [];
     assignedDriverProfile = null;
     pickupLocation = null;
     destinationLocation = null;
@@ -493,6 +735,7 @@ class RideController extends ChangeNotifier {
   void dispose() {
     _rideSubscription?.cancel();
     _driverSubscription?.cancel();
+    _riderPositionSubscription?.cancel();
     SimulationService.stopRideSimulation();
     super.dispose();
   }
