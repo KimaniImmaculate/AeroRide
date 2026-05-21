@@ -10,4 +10,23 @@ class MockRouteService {
       const LatLng(-1.3033, 36.8467), // End (Destination)
     ];
   }
+
+  static List<LatLng> buildRoutePoints(
+    LatLng start,
+    LatLng end, {
+    int steps = 24,
+  }) {
+    if (steps < 2) {
+      return [start, end];
+    }
+
+    final points = <LatLng>[];
+    for (var i = 0; i <= steps; i++) {
+      final t = i / steps;
+      final latitude = start.latitude + (end.latitude - start.latitude) * t;
+      final longitude = start.longitude + (end.longitude - start.longitude) * t;
+      points.add(LatLng(latitude, longitude));
+    }
+    return points;
+  }
 }

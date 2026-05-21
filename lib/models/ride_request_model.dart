@@ -11,6 +11,8 @@ class RideRequest {
   final String destinationAddress;
   final String status;
   final double estimatedCost;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
 
   RideRequest({
     this.id,
@@ -23,6 +25,8 @@ class RideRequest {
     required this.destinationAddress,
     required this.status,
     required this.estimatedCost,
+    this.createdAt,
+    this.updatedAt,
   });
 
   factory RideRequest.fromMap(Map<String, dynamic> map, String docId) {
@@ -38,7 +42,9 @@ class RideRequest {
       pickupAddress: map['pickupAddress'] ?? '',
       destinationAddress: map['destinationAddress'] ?? '',
       status: map['status'] ?? 'searching',
-      estimatedCost: (map['estimatedCost'] as num).toDouble(),
+      estimatedCost: (map['estimatedCost'] as num?)?.toDouble() ?? 0.0,
+      createdAt: (map['createdAt'] as Timestamp?)?.toDate(),
+      updatedAt: (map['updatedAt'] as Timestamp?)?.toDate(),
     );
   }
 
@@ -53,6 +59,8 @@ class RideRequest {
       'destinationAddress': destinationAddress,
       'status': status,
       'estimatedCost': estimatedCost,
+      if (createdAt != null) 'createdAt': Timestamp.fromDate(createdAt!),
+      if (updatedAt != null) 'updatedAt': Timestamp.fromDate(updatedAt!),
     };
   }
 }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:math';
 import 'package:geolocator/geolocator.dart';
@@ -20,24 +21,37 @@ class DriversService {
     }
 
     // Start listening to position updates
-    _positionSub =
-        Geolocator.getPositionStream(
-          locationSettings: const LocationSettings(
+    final LocationSettings locationSettings =
+        defaultTargetPlatform == TargetPlatform.android
+        ? AndroidSettings(
             accuracy: LocationAccuracy.bestForNavigation,
-            distanceFilter: 10, // meters
-          ),
-        ).listen((Position pos) async {
-          try {
-            await _db.collection('drivers').doc(uid).set({
-              'current_location': GeoPoint(pos.latitude, pos.longitude),
-              'isOnline': true,
-              'updatedAt': FieldValue.serverTimestamp(),
-            }, SetOptions(merge: true));
-          } catch (e) {
-            // swallow — UI can show problems if needed
-            print('Error writing driver location: $e');
-          }
-        });
+            distanceFilter: 10,
+            forceLocationManager: false,
+            intervalDuration: const Duration(seconds: 3),
+          )
+        : AppleSettings(
+            accuracy: LocationAccuracy.bestForNavigation,
+            distanceFilter: 10,
+            activityType: ActivityType.otherNavigation,
+            pauseLocationUpdatesAutomatically: false,
+            showBackgroundLocationIndicator: true,
+          );
+
+    _positionSub =
+        Geolocator.getPositionStream(locationSettings: locationSettings).listen(
+          (Position pos) async {
+            try {
+              await _db.collection('drivers').doc(uid).set({
+                'current_location': GeoPoint(pos.latitude, pos.longitude),
+                'isOnline': true,
+                'updatedAt': FieldValue.serverTimestamp(),
+              }, SetOptions(merge: true));
+            } catch (e) {
+              // swallow — UI can show problems if needed
+              debugPrint('Error writing driver location: $e');
+            }
+          },
+        );
   }
 
   Future<void> stopLocationUpdates(String uid) async {
@@ -85,6 +99,42 @@ class DriversService {
           (a['distanceKm'] as double).compareTo(b['distanceKm'] as double),
     );
     return results;
+  }
+
+  Future<List<Map<String, dynamic>>> getTopNearbyDrivers(
+    double lat,
+    double lng, {
+    double initialRadiusKm = 5.0,
+    double maxRadiusKm = 15.0,
+    int limit = 5,
+  }) async {
+    final seenDriverIds = <String>{};
+    final allResults = <Map<String, dynamic>>[];
+
+    for (
+      double radius = initialRadiusKm;
+      radius <= maxRadiusKm;
+      radius += initialRadiusKm
+    ) {
+      final results = await getNearbyDrivers(lat, lng, radiusKm: radius);
+      for (final driver in results) {
+        final driverId = driver['driverId'] as String;
+        if (seenDriverIds.add(driverId)) {
+          allResults.add(driver);
+        }
+      }
+
+      allResults.sort(
+        (a, b) =>
+            (a['distanceKm'] as double).compareTo(b['distanceKm'] as double),
+      );
+
+      if (allResults.length >= limit) {
+        break;
+      }
+    }
+
+    return allResults.take(limit).toList();
   }
 
   double _distanceKm(double lat1, double lon1, double lat2, double lon2) {

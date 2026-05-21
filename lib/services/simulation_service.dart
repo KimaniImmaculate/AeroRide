@@ -1,0 +1,215 @@
+import 'dart:async';
+import 'dart:math';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:flutter/foundation.dart';
+import 'package:aeroride/services/mock_route_service.dart';
+
+class SimulationService {
+  static final FirebaseFirestore _db = FirebaseFirestore.instance;
+  static final Map<String, Timer> _movementTimers = {};
+
+  // Create simple simulated drivers around `center` and start moving them slowly.
+  // Returns the created driver ids.
+  static Future<List<String>> seedMockDrivers(
+    LatLng center, {
+    int count = 5,
+    double spreadMeters = 800,
+  }) async {
+    debugPrint('SimulationService: seeding $count drivers around $center');
+    final rnd = Random();
+    final created = <String>[];
+
+    for (var i = 0; i < count; i++) {
+      final id = 'sim-driver-${DateTime.now().millisecondsSinceEpoch}-$i';
+      final angle = rnd.nextDouble() * pi * 2;
+      final dist = rnd.nextDouble() * spreadMeters; // meters
+
+      // rough meter to degree conversion
+      final latOffset = (dist / 111000) * cos(angle);
+      final lonOffset =
+          (dist / (111000 * cos(center.latitude * pi / 180))) * sin(angle);
+
+      final lat = center.latitude + latOffset;
+      final lng = center.longitude + lonOffset;
+
+      await _db.collection('drivers').doc(id).set({
+        'current_location': GeoPoint(lat, lng),
+        'isOnline': true,
+        'updatedAt': Timestamp.now(),
+      });
+
+      // start simple movement timer for this driver
+      _startMovingDriver(id, LatLng(lat, lng));
+      debugPrint('SimulationService: created driver $id at $lat,$lng');
+      created.add(id);
+    }
+
+    return created;
+  }
+
+  static void _startMovingDriver(String id, LatLng start) {
+    final rnd = Random();
+    var pos = start;
+    _movementTimers[id]?.cancel();
+    _movementTimers[id] = Timer.periodic(const Duration(seconds: 2), (_) async {
+      // small random walk
+      final dLat = (rnd.nextDouble() - 0.5) * 0.0002;
+      final dLng = (rnd.nextDouble() - 0.5) * 0.0002;
+      pos = LatLng(pos.latitude + dLat, pos.longitude + dLng);
+      try {
+        await _db.collection('drivers').doc(id).set({
+          'current_location': GeoPoint(pos.latitude, pos.longitude),
+          'isOnline': true,
+          'updatedAt': Timestamp.now(),
+        }, SetOptions(merge: true));
+      } catch (_) {}
+    });
+  }
+
+  static Future<void> stopAllSimulatedDrivers() async {
+    for (final t in _movementTimers.values) {
+      t.cancel();
+    }
+    _movementTimers.clear();
+  }
+
+  // Create a few mock rides that include the provided driver id in candidateDrivers
+  static Future<void> createMockRidesForDriver(
+    String driverUid, {
+    LatLng? center,
+    int count = 3,
+  }) async {
+    final rnd = Random();
+    final base = center ?? const LatLng(-1.2833, 36.8167);
+
+    for (var i = 0; i < count; i++) {
+      final pickup = LatLng(
+        base.latitude + (rnd.nextDouble() - 0.5) * 0.02,
+        base.longitude + (rnd.nextDouble() - 0.5) * 0.02,
+      );
+      final dest = LatLng(
+        base.latitude + (rnd.nextDouble() - 0.5) * 0.02,
+        base.longitude + (rnd.nextDouble() - 0.5) * 0.02,
+      );
+
+      await _db.collection('rides').add({
+        'userId': 'sim-user-$i',
+        'driverId': null,
+        'candidateDrivers': [driverUid],
+        'pickupLocation': GeoPoint(pickup.latitude, pickup.longitude),
+        'destinationLocation': GeoPoint(dest.latitude, dest.longitude),
+        'pickupAddress': 'Sim Pickup $i',
+        'destinationAddress': 'Sim Drop $i',
+        'status': 'searching',
+        'estimatedCost': 10 + rnd.nextDouble() * 20,
+      });
+    }
+  }
+
+  static Timer? _rideSimulationTimer;
+  static String? _currentSimulatedRideId;
+
+  // Run database-driven simulation for the ride lifecycle.
+  static Future<void> simulateRideLifecycle({
+    required String rideId,
+    required String driverId,
+    required LatLng pickup,
+    required LatLng destination,
+  }) async {
+    if (_currentSimulatedRideId == rideId) return;
+    _currentSimulatedRideId = rideId;
+    _rideSimulationTimer?.cancel();
+
+    debugPrint('SimulationService: Starting ride simulation for ride $rideId');
+
+    // 1. Get driver starting location or default to offset
+    LatLng driverStart = LatLng(pickup.latitude + 0.005, pickup.longitude + 0.005);
+    try {
+      final doc = await _db.collection('drivers').doc(driverId).get();
+      if (doc.exists && doc.data()?['current_location'] != null) {
+        final gp = doc.data()!['current_location'] as GeoPoint;
+        driverStart = LatLng(gp.latitude, gp.longitude);
+      }
+    } catch (e) {
+      debugPrint('SimulationService: Could not read driver location, using default offset: $e');
+    }
+
+    // 2. Build coordinates for both legs
+    // Leg 1: Driver to pickup (approx. 10 steps)
+    final toPickupPoints = MockRouteService.buildRoutePoints(driverStart, pickup, steps: 10);
+    // Leg 2: Pickup to destination (approx. 15 steps)
+    final toDestPoints = MockRouteService.buildRoutePoints(pickup, destination, steps: 15);
+
+    int step = 0;
+    int leg = 1; // 1: moving to pickup, 2: waiting at pickup, 3: moving to destination, 4: completed
+    int waitingCounter = 0;
+
+    _rideSimulationTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      try {
+        if (leg == 1) {
+          // Leg 1: Moving to pickup
+          if (step < toPickupPoints.length) {
+            final pos = toPickupPoints[step];
+            await _db.collection('drivers').doc(driverId).set({
+              'current_location': GeoPoint(pos.latitude, pos.longitude),
+              'updatedAt': Timestamp.now(),
+            }, SetOptions(merge: true));
+            step++;
+          } else {
+            // Arrived at pickup
+            await _db.collection('rides').doc(rideId).update({
+              'status': 'arrived',
+            });
+            leg = 2;
+            waitingCounter = 0;
+            debugPrint('SimulationService: Driver arrived at pickup.');
+          }
+        } else if (leg == 2) {
+          // Leg 2: Waiting at pickup (representing rider boarding)
+          waitingCounter++;
+          if (waitingCounter >= 4) {
+            // Start trip
+            await _db.collection('rides').doc(rideId).update({
+              'status': 'started',
+            });
+            leg = 3;
+            step = 0;
+            debugPrint('SimulationService: Trip started.');
+          }
+        } else if (leg == 3) {
+          // Leg 3: Moving to destination
+          if (step < toDestPoints.length) {
+            final pos = toDestPoints[step];
+            await _db.collection('drivers').doc(driverId).set({
+              'current_location': GeoPoint(pos.latitude, pos.longitude),
+              'updatedAt': Timestamp.now(),
+            }, SetOptions(merge: true));
+            step++;
+          } else {
+            // Arrived at destination
+            await _db.collection('rides').doc(rideId).update({
+              'status': 'completed',
+            });
+            leg = 4;
+            timer.cancel();
+            _rideSimulationTimer = null;
+            debugPrint('SimulationService: Trip completed.');
+          }
+        }
+      } catch (e) {
+        debugPrint('SimulationService: Error in ride simulation loop: $e');
+        timer.cancel();
+        _rideSimulationTimer = null;
+      }
+    });
+  }
+
+  static void stopRideSimulation() {
+    _rideSimulationTimer?.cancel();
+    _rideSimulationTimer = null;
+    _currentSimulatedRideId = null;
+    debugPrint('SimulationService: Stopped ride simulation.');
+  }
+}

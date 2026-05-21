@@ -58,12 +58,12 @@ class _TestRidesSeederState extends State<TestRidesSeeder> {
 
         final ref = await _db.collection('rides').add(doc);
         setState(() {
-          _log = 'Created ${ref.id}\n' + _log;
+          _log = 'Created ${ref.id}\n$_log';
         });
       }
     } catch (e) {
       setState(() {
-        _log = 'Error: $e\n' + _log;
+        _log = 'Error: $e\n$_log';
       });
     } finally {
       setState(() => _running = false);

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:geocoding/geocoding.dart';
 import '../controllers/ride_controller.dart';
 import '../services/auth_service.dart';
 
@@ -18,6 +19,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   LatLng? _pickup;
   LatLng? _destination;
+  String? _pickupPlaceName;
+  String? _destinationPlaceName;
   bool _isSelectingPickup = true;
 
   @override
@@ -33,20 +36,50 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _onMapTap(LatLng location) {
-    if (_rideController.activeRideId != null)
+    if (_rideController.activeRideId != null) {
       return; // Can't change during active ride
+    }
 
     setState(() {
       if (_isSelectingPickup) {
         _pickup = location;
+        _pickupPlaceName = null;
         _isSelectingPickup = false; // Next tap is destination
       } else {
         _destination = location;
+        _destinationPlaceName = null;
         _isSelectingPickup = true; // Reset or keep changing destination
       }
     });
 
     _updateMarkers();
+    _resolvePlaceNameFor(location, _isSelectingPickup ? false : true);
+  }
+
+  Future<void> _resolvePlaceNameFor(LatLng location, bool isPickup) async {
+    try {
+      final places = await placemarkFromCoordinates(
+        location.latitude,
+        location.longitude,
+      );
+      if (places.isNotEmpty) {
+        final p = places.first;
+        final parts = <String>[];
+        if ((p.name ?? '').trim().isNotEmpty) parts.add(p.name!.trim());
+        if ((p.street ?? '').trim().isNotEmpty) parts.add(p.street!.trim());
+        final label = parts.isEmpty
+            ? '${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}'
+            : parts.take(2).join(', ');
+        setState(() {
+          if (isPickup)
+            _pickupPlaceName = label;
+          else
+            _destinationPlaceName = label;
+        });
+      }
+    } catch (_) {
+      // ignore and leave coordinate fallback
+    }
   }
 
   void _updateMarkers() {
@@ -157,10 +190,14 @@ class _HomeScreenState extends State<HomeScreen> {
                           children: [
                             const Icon(Icons.my_location, color: Colors.green),
                             const SizedBox(width: 8),
-                            Text(
-                              _pickup != null
-                                  ? "${_pickup!.latitude.toStringAsFixed(4)}, ${_pickup!.longitude.toStringAsFixed(4)}"
-                                  : "Not set",
+                            Expanded(
+                              child: Text(
+                                _pickupPlaceName ??
+                                    (_pickup != null
+                                        ? "${_pickup!.latitude.toStringAsFixed(4)}, ${_pickup!.longitude.toStringAsFixed(4)}"
+                                        : "Not set"),
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                           ],
                         ),
@@ -169,10 +206,14 @@ class _HomeScreenState extends State<HomeScreen> {
                           children: [
                             const Icon(Icons.place, color: Colors.red),
                             const SizedBox(width: 8),
-                            Text(
-                              _destination != null
-                                  ? "${_destination!.latitude.toStringAsFixed(4)}, ${_destination!.longitude.toStringAsFixed(4)}"
-                                  : "Not set",
+                            Expanded(
+                              child: Text(
+                                _destinationPlaceName ??
+                                    (_destination != null
+                                        ? "${_destination!.latitude.toStringAsFixed(4)}, ${_destination!.longitude.toStringAsFixed(4)}"
+                                        : "Not set"),
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                           ],
                         ),
