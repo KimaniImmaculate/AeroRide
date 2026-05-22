@@ -8,6 +8,10 @@ import '../models/ride_type_model.dart';
 class FirestoreService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
+  // ==========================================
+  //      PRODUCTION INITIALIZATION & PROFILE
+  // ==========================================
+
   // Save User profile info to DB
   Future<void> createUserProfile(UserModel user) async {
     await _db
@@ -65,16 +69,17 @@ class FirestoreService {
     return rides.take(limit).toList();
   }
 
+  // ==========================================
+  //          PRODUCTION RIDE ACTIONS
+  // ==========================================
+
   // CREATE: Post a new ride request document to Firestore
   Future<String> createRideRequest(RideRequest rideRequest) async {
-    DocumentReference docRef = await _db
-        .collection('rides')
-        .add({
-          ...rideRequest.toMap(),
-          'createdAt': FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        })
-        .timeout(const Duration(seconds: 12));
+    DocumentReference docRef = await _db.collection('rides').add({
+      ...rideRequest.toMap(),
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }).timeout(const Duration(seconds: 12));
     return docRef.id;
   }
 
@@ -111,15 +116,13 @@ class FirestoreService {
         label: 'FirestoreService.createRideRequestWithWalletReservation',
       );
 
-      await rideRef
-          .set({
-            ...rideRequest.toMap(),
-            'estimatedCost': fare,
-            'createdAt': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-            'paymentStatus': 'pending',
-          })
-          .timeout(const Duration(seconds: 12));
+      await rideRef.set({
+        ...rideRequest.toMap(),
+        'estimatedCost': fare,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'paymentStatus': 'pending',
+      }).timeout(const Duration(seconds: 12));
 
       return rideRef.id;
     }
@@ -249,15 +252,21 @@ class FirestoreService {
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
-      tx.set(riderWalletRef, {
-        'balance': newRiderBalance,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      tx.set(
+          riderWalletRef,
+          {
+            'balance': newRiderBalance,
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true));
 
-      tx.set(driverWalletRef, {
-        'balance': driverBalance + amount,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      tx.set(
+          driverWalletRef,
+          {
+            'balance': driverBalance + amount,
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true));
     });
   }
 
@@ -292,15 +301,21 @@ class FirestoreService {
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
-      tx.set(riderWalletRef, {
-        'balance': balance + amount,
-        'reservedBalance': reservedBalance >= amount
-            ? reservedBalance - amount
-            : 0.0,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      tx.set(
+          riderWalletRef,
+          {
+            'balance': balance + amount,
+            'reservedBalance':
+                reservedBalance >= amount ? reservedBalance - amount : 0.0,
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true));
     });
   }
+
+  // ==========================================
+  //          METRICS & CONFIGURATIONS
+  // ==========================================
 
   // Ride Types
   Stream<List<RideTypeModel>> streamRideTypes() {
@@ -379,6 +394,107 @@ class FirestoreService {
       'driverDistanceKm': distanceKm,
       'driverStatus': driverStatus,
       'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  // ==========================================
+  //    MVP INTERFACES & MOCK SIMULATIONS
+  // ==========================================
+
+  /// Updates candidate drivers assigned to a live request.
+  Future<void> updateRideCandidateDrivers(
+    String rideId,
+    List<String> driverIds,
+  ) async {
+    await _db.collection('rides').doc(rideId).update({
+      'candidateDrivers': driverIds,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Forces a mock status update sequence for simulator dashboard controllers.
+  Future<void> updateMockTripStatus(String rideId, String status) async {
+    await _db.collection('rides').doc(rideId).update({
+      'status': status,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Creates a mock trip targeting dummy endpoints.
+  Future<String> createMockTrip({
+    required String riderId,
+    required GeoPoint pickup,
+    required GeoPoint destination,
+    required String pickupAddress,
+    required String destinationAddress,
+    required double cost,
+  }) async {
+    final docRef = await _db.collection('rides').add({
+      'userId': riderId,
+      'pickupLocation': pickup,
+      'destinationLocation': destination,
+      'pickupAddress': pickupAddress,
+      'destinationAddress': destinationAddress,
+      'status': 'searching',
+      'estimatedCost': cost,
+      'createdAt': FieldValue.serverTimestamp(),
+      'candidateDrivers': [],
+      'driverId': null,
+    });
+    return docRef.id;
+  }
+
+  /// Spawns dummy tracking points directly into the drivers workspace loop.
+  Future<int> seedMockDrivers(int count, GeoPoint centerPoint) async {
+    final batch = _db.batch();
+    for (int i = 0; i < count; i++) {
+      final docRef = _db.collection('drivers').doc('mock-driver-$i');
+      batch.set(docRef, {
+        'driverId': 'mock-driver-$i',
+        'name': 'Mock Driver #${i + 1}',
+        'currentLocation': centerPoint,
+        'isAvailable': true,
+        'status': 'online',
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
+    await batch.commit();
+    return count;
+  }
+
+  /// Streams available mock drivers.
+  Future<List<Map<String, dynamic>>> getAvailableMockDrivers() async {
+    final snapshot = await _db
+        .collection('drivers')
+        .where('isAvailable', isEqualTo: true)
+        .where('status', isEqualTo: 'online')
+        .get();
+
+    return snapshot.docs
+        .map((doc) => {
+              'driverId': doc.id,
+              ...doc.data(),
+            })
+        .toList();
+  }
+
+  /// Atomically pairs an unassigned simulation driver to a ride document request.
+  Future<void> assignDriverAndAcceptTrip(String rideId, String driverId) async {
+    await _db.runTransaction((transaction) async {
+      final rideRef = _db.collection('rides').doc(rideId);
+      final driverRef = _db.collection('drivers').doc(driverId);
+
+      transaction.update(rideRef, {
+        'driverId': driverId,
+        'status': 'accepted',
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      transaction.update(driverRef, {
+        'isAvailable': false,
+        'currentRideId': rideId,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
     });
   }
 }

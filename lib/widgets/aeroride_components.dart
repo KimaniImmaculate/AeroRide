@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-
 import '../theme/aeroride_theme.dart';
+import '../utils/currency.dart';
 
 class AeroRideGradientShell extends StatelessWidget {
   final Widget child;
@@ -94,7 +94,7 @@ class AeroRideSectionTitle extends StatelessWidget {
             ],
           ),
         ),
-        ?trailing,
+        if (trailing != null) trailing!,
       ],
     );
   }
@@ -261,8 +261,8 @@ class AeroRideRideTypeCard extends StatelessWidget {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
         width: 150,
-        height: 88,
-        padding: const EdgeInsets.all(8),
+        constraints: const BoxConstraints(minHeight: 92),
+        padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
           color: selected ? const Color(0xFFF8FBFF) : Colors.white,
           borderRadius: BorderRadius.circular(20),
@@ -283,7 +283,6 @@ class AeroRideRideTypeCard extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
             ),
-            const SizedBox(height: 0),
             Text(
               price,
               maxLines: 1,
@@ -294,7 +293,6 @@ class AeroRideRideTypeCard extends StatelessWidget {
                 fontSize: 14,
               ),
             ),
-            const SizedBox(height: 0),
             Text(
               eta,
               maxLines: 1,
@@ -531,7 +529,7 @@ class AeroRideTipSelector extends StatelessWidget {
                   ),
                   child: Center(
                     child: Text(
-                      'KES ${tip.toStringAsFixed(0)}',
+                      formatKES(tip),
                       style: TextStyle(
                         color: tip == selectedTip
                             ? Colors.white
@@ -594,7 +592,7 @@ class AeroRidePaymentOption extends StatelessWidget {
               ],
             ),
           ),
-          ?trailing,
+          if (trailing != null) trailing!,
         ],
       ),
     );

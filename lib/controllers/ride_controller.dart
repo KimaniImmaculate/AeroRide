@@ -10,7 +10,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:aeroride/services/firestore_service.dart';
 import 'package:aeroride/services/drivers_service.dart';
-import 'package:aeroride/services/surge_pricing_service.dart';
 import 'package:aeroride/services/simulation_service.dart';
 import 'package:aeroride/models/user_model.dart';
 import 'package:aeroride/models/ride_type_model.dart';
@@ -21,7 +20,6 @@ typedef ArrivalCallback = void Function(String driverName, String vehicleInfo);
 class RideController extends ChangeNotifier {
   final FirestoreService _firestoreService = FirestoreService();
   final DriversService _driversService = DriversService();
-  final SurgePricingService _surgePricingService = SurgePricingService();
 
   StreamSubscription<RideRequest>? _rideSubscription;
   StreamSubscription<DocumentSnapshot>? _driverSubscription;
@@ -87,43 +85,14 @@ class RideController extends ChangeNotifier {
       currentRideStatus = "REQUESTING...";
       notifyListeners();
 
-      // 1. Fetch nearby drivers if not supplied
-      stage = 'fetching nearby drivers';
-      if (candidateDriverIds == null || candidateDriverIds.isEmpty) {
-        final nearby = await _driversService.getTopNearbyDrivers(
-          pickup.latitude,
-          pickup.longitude,
-          limit: 5,
-        );
-        nearbyDriverPreviews = nearby;
-        candidateDriverIds = nearby
-            .take(5)
-            .map((d) => d['driverId'] as String)
-            .toList();
-
-        if (candidateDriverIds.isEmpty && simulationMode) {
-          await SimulationService.seedMockDrivers(pickup, count: 5);
-          final simulatedNearby = await _driversService.getTopNearbyDrivers(
-            pickup.latitude,
-            pickup.longitude,
-            limit: 5,
-          );
-          nearbyDriverPreviews = simulatedNearby;
-          candidateDriverIds = simulatedNearby
-              .take(5)
-              .map((d) => d['driverId'] as String)
-              .toList();
-        }
-
-        _updateMarkersAndPolylines();
-        notifyListeners();
-      }
-
-      stage = 'quoting surge pricing';
-      final surgeQuote = await _surgePricingService.quoteForPickup(
-        baseFare: 12.0,
-        pickup: pickup,
-      );
+      // Keep the request path short so the ride document is created before
+      // slower discovery and pricing work runs in the background.
+      const candidateTargetCount = 2;
+      final rideFare = _estimateBaseFare(rideType);
+      final resolvedCandidateDrivers =
+          candidateDriverIds == null || candidateDriverIds.isEmpty
+              ? <String>[]
+              : List<String>.from(candidateDriverIds);
 
       final newRide = RideRequest(
         userId: userId,
@@ -132,18 +101,18 @@ class RideController extends ChangeNotifier {
         pickupAddress: pickupText,
         destinationAddress: dropoffText,
         status: 'searching',
-        estimatedCost: surgeQuote.finalFare,
-        candidateDrivers: candidateDriverIds,
+        estimatedCost: rideFare,
+        candidateDrivers: resolvedCandidateDrivers,
         rideType: rideType,
       );
 
-      stage = 'creating ride transaction';
-      String rideId = await _firestoreService
-          .createRideRequestWithWalletReservation(
-            rideRequest: newRide,
-            riderId: userId,
-            fare: surgeQuote.finalFare,
-          );
+      stage = 'creating ride request';
+      String rideId =
+          await _firestoreService.createRideRequestWithWalletReservation(
+        rideRequest: newRide,
+        riderId: userId,
+        fare: rideFare,
+      );
       activeRideId = rideId;
       final shouldAutoAssign = autoAssignDriver || simulationMode;
 
@@ -153,6 +122,17 @@ class RideController extends ChangeNotifier {
           newRide.candidateDrivers != null &&
           newRide.candidateDrivers!.isNotEmpty) {
         _autoAssignDriver(rideId, newRide.candidateDrivers!);
+      }
+
+      if ((candidateDriverIds == null || candidateDriverIds.isEmpty) &&
+          !simulationMode) {
+        unawaited(
+          _populateNearbyDriversForRide(
+            rideId: rideId,
+            pickup: pickup,
+            limit: candidateTargetCount,
+          ),
+        );
       }
 
       // Instantly stream updates
@@ -175,6 +155,53 @@ class RideController extends ChangeNotifier {
     }
   }
 
+  double _estimateBaseFare(String rideType) {
+    switch (rideType) {
+      case 'economy':
+        return 12.50;
+      case 'premium':
+        return 28.50;
+      case 'standard':
+      default:
+        return 18.00;
+    }
+  }
+
+  Future<void> _populateNearbyDriversForRide({
+    required String rideId,
+    required LatLng pickup,
+    required int limit,
+  }) async {
+    try {
+      final nearby = await _driversService
+          .getTopNearbyDrivers(pickup.latitude, pickup.longitude, limit: limit)
+          .timeout(const Duration(seconds: 4), onTimeout: () => []);
+
+      nearbyDriverPreviews = nearby;
+      _updateMarkersAndPolylines();
+      notifyListeners();
+
+      final driverIds = nearby
+          .take(limit)
+          .map((driver) => driver['driverId'] as String)
+          .toList();
+      if (driverIds.isEmpty) {
+        return;
+      }
+
+      // FIXED: Using activeRideId to ensure the variable is defined in this scope
+      if (activeRideId != null) {
+        await _firestoreService.updateRideCandidateDrivers(
+            activeRideId!, driverIds);
+      } else {
+        debugPrint(
+            'RideController: Cannot update candidate drivers because activeRideId is null.');
+      }
+    } catch (error) {
+      debugPrint('RideController: nearby driver refresh skipped: $error');
+    }
+  }
+
   void listenToLiveRide(String rideId) {
     _rideSubscription?.cancel();
     _driverSubscription?.cancel();
@@ -185,73 +212,71 @@ class RideController extends ChangeNotifier {
     driverLocation = null;
     assignedDriverProfile = null;
 
-    _rideSubscription = _firestoreService
-        .streamRideStatus(rideId)
-        .listen(
-          (RideRequest liveRide) async {
-            final prevStatus = currentRideStatus;
-            currentRideStatus = liveRide.status.toUpperCase();
-            pickupLocation = liveRide.pickupLocation.toLatLng();
-            destinationLocation = liveRide.destinationLocation.toLatLng();
-            estimatedCost = liveRide.estimatedCost;
+    _rideSubscription = _firestoreService.streamRideStatus(rideId).listen(
+      (RideRequest liveRide) async {
+        final prevStatus = currentRideStatus;
+        currentRideStatus = liveRide.status.toUpperCase();
+        pickupLocation = liveRide.pickupLocation.toLatLng();
+        destinationLocation = liveRide.destinationLocation.toLatLng();
+        estimatedCost = liveRide.estimatedCost;
 
-            // Set up driver subscription if accepted or in progress
-            final driverId = liveRide.driverId;
-            if (driverId != null &&
-                (currentRideStatus == 'ACCEPTED' ||
-                    currentRideStatus == 'ARRIVED' ||
-                    currentRideStatus == 'STARTED' ||
-                    currentRideStatus == 'COMPLETED')) {
-              _setupDriverSubscription(driverId);
-              _setupDriverProfile(driverId);
+        // Set up driver subscription if accepted or in progress
+        final driverId = liveRide.driverId;
+        if (driverId != null &&
+            (currentRideStatus == 'ACCEPTED' ||
+                currentRideStatus == 'ARRIVED' ||
+                currentRideStatus == 'STARTED' ||
+                currentRideStatus == 'COMPLETED')) {
+          _setupDriverSubscription(driverId);
+          _setupDriverProfile(driverId);
 
-              // If it's a simulated driver and status is accepted, trigger the simulation runner
-              if (driverId.startsWith('sim-driver-') &&
-                  currentRideStatus == 'ACCEPTED') {
-                SimulationService.simulateRideLifecycle(
-                  rideId: rideId,
-                  driverId: driverId,
-                  pickup: pickupLocation!,
-                  destination: destinationLocation!,
-                );
-              }
+          // If it's a simulated driver and status is accepted, trigger the simulation runner
+          if (driverId.startsWith('sim-driver-') &&
+              currentRideStatus == 'ACCEPTED') {
+            SimulationService.simulateRideLifecycle(
+              rideId: rideId,
+              driverId: driverId,
+              pickup: pickupLocation!,
+              destination: destinationLocation!,
+            );
+          }
+        }
+
+        if (currentRideStatus == 'COMPLETED' ||
+            currentRideStatus == 'CANCELLED') {
+          _driverSubscription?.cancel();
+          _driverSubscription = null;
+          SimulationService.stopRideSimulation();
+        }
+
+        // Notify UI when driver arrives
+        if (prevStatus != 'ARRIVED' && currentRideStatus == 'ARRIVED') {
+          try {
+            final driverName = assignedDriverProfile?.name ?? 'Driver';
+            final vehicle = driverVehicle ?? '';
+            await _sendArrivalNotification(liveRide);
+            if (onDriverArrived != null) {
+              onDriverArrived!.call(driverName, vehicle);
             }
+            try {
+              NotificationService().showLocalNotification(
+                title: 'Driver Arrived',
+                body: '$driverName has arrived in $vehicle',
+              );
+            } catch (_) {}
+          } catch (_) {}
+        }
 
-            if (currentRideStatus == 'COMPLETED' ||
-                currentRideStatus == 'CANCELLED') {
-              _driverSubscription?.cancel();
-              _driverSubscription = null;
-              SimulationService.stopRideSimulation();
-            }
-
-            // Notify UI when driver arrives
-            if (prevStatus != 'ARRIVED' && currentRideStatus == 'ARRIVED') {
-              try {
-                final driverName = assignedDriverProfile?.name ?? 'Driver';
-                final vehicle = driverVehicle ?? '';
-                await _sendArrivalNotification(liveRide);
-                if (onDriverArrived != null) {
-                  onDriverArrived!.call(driverName, vehicle);
-                }
-                try {
-                  NotificationService().showLocalNotification(
-                    title: 'Driver Arrived',
-                    body: '$driverName has arrived in $vehicle',
-                  );
-                } catch (_) {}
-              } catch (_) {}
-            }
-
-            _updateMarkersAndPolylines();
-            _fitCameraToRoute();
-            notifyListeners();
-          },
-          onError: (error) {
-            currentRideStatus = "STREAM ERROR: $error";
-            notifyListeners();
-            debugPrint("RideController: Stream error: $error");
-          },
-        );
+        _updateMarkersAndPolylines();
+        _fitCameraToRoute();
+        notifyListeners();
+      },
+      onError: (error) {
+        currentRideStatus = "STREAM ERROR: $error";
+        notifyListeners();
+        debugPrint("RideController: Stream error: $error");
+      },
+    );
   }
 
   void _setupDriverSubscription(String driverId) {
@@ -262,61 +287,62 @@ class RideController extends ChangeNotifier {
         .doc(driverId)
         .snapshots()
         .listen((snapshot) {
-          if (snapshot.exists && snapshot.data() != null) {
-            final gp = snapshot.data()!['current_location'] as GeoPoint?;
-            if (gp != null) {
-              driverLocation = gp.toLatLng();
-              // compute ETA and distance
-              try {
-                if (pickupLocation != null) {
-                  final meters = _distanceMeters(
-                    driverLocation!.latitude,
-                    driverLocation!.longitude,
-                    pickupLocation!.latitude,
-                    pickupLocation!.longitude,
-                  );
-                  driverDistanceKm = (meters / 1000.0);
-                  // assume average urban speed 500 m/min (~30 km/h)
-                  driverEtaMinutes = (meters / 500).ceil();
-                }
-                if (destinationLocation != null &&
-                    currentRideStatus == 'STARTED') {
-                  final meters = _distanceMeters(
-                    driverLocation!.latitude,
-                    driverLocation!.longitude,
-                    destinationLocation!.latitude,
-                    destinationLocation!.longitude,
-                  );
-                  driverDistanceKm = (meters / 1000.0);
-                  driverEtaMinutes = (meters / 500).ceil();
-                }
-              } catch (_) {}
-
-              // persist ETA to Firestore for server-side visibility
-              try {
-                if (activeRideId != null) {
-                  _firestoreService.updateDriverEta(
-                    rideId: activeRideId!,
-                    etaMinutes: driverEtaMinutes,
-                    distanceKm: driverDistanceKm,
-                    driverStatus: currentRideStatus.toLowerCase(),
-                  );
-                }
-              } catch (_) {}
-
-              _updateMarkersAndPolylines();
-              notifyListeners();
+      if (snapshot.exists && snapshot.data() != null) {
+        final data = snapshot.data()!;
+        // FIXED: Fallback safety to check both camelCase and snake_case properties
+        final gp =
+            (data['currentLocation'] ?? data['current_location']) as GeoPoint?;
+        if (gp != null) {
+          driverLocation = gp.toLatLng();
+          // compute ETA and distance
+          try {
+            if (pickupLocation != null) {
+              final meters = _distanceMeters(
+                driverLocation!.latitude,
+                driverLocation!.longitude,
+                pickupLocation!.latitude,
+                pickupLocation!.longitude,
+              );
+              driverDistanceKm = (meters / 1000.0);
+              // assume average urban speed 500 m/min (~30 km/h)
+              driverEtaMinutes = (meters / 500).ceil();
             }
-          }
-        });
+            if (destinationLocation != null && currentRideStatus == 'STARTED') {
+              final meters = _distanceMeters(
+                driverLocation!.latitude,
+                driverLocation!.longitude,
+                destinationLocation!.latitude,
+                destinationLocation!.longitude,
+              );
+              driverDistanceKm = (meters / 1000.0);
+              driverEtaMinutes = (meters / 500).ceil();
+            }
+          } catch (_) {}
+
+          // persist ETA to Firestore for server-side visibility
+          try {
+            if (activeRideId != null) {
+              _firestoreService.updateDriverEta(
+                rideId: activeRideId!,
+                etaMinutes: driverEtaMinutes,
+                distanceKm: driverDistanceKm,
+                driverStatus: currentRideStatus.toLowerCase(),
+              );
+            }
+          } catch (_) {}
+
+          _updateMarkersAndPolylines();
+          notifyListeners();
+        }
+      }
+    });
   }
 
   double _distanceMeters(double lat1, double lng1, double lat2, double lng2) {
     const earthRadius = 6371000.0;
     final dLat = _degToRad(lat2 - lat1);
     final dLng = _degToRad(lng2 - lng1);
-    final a =
-        (sin(dLat / 2) * sin(dLat / 2)) +
+    final a = (sin(dLat / 2) * sin(dLat / 2)) +
         cos(_degToRad(lat1)) *
             cos(_degToRad(lat2)) *
             (sin(dLng / 2) * sin(dLng / 2));
@@ -424,16 +450,15 @@ class RideController extends ChangeNotifier {
         Marker(
           markerId: const MarkerId('driver'),
           position: driverLocation!,
-          icon:
-              _driverMarkerIcon ??
+          icon: _driverMarkerIcon ??
               BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
           infoWindow: InfoWindow(
             title: assignedDriverProfile?.name ?? "Driver",
             snippet: currentRideStatus == 'ACCEPTED'
                 ? "On the way to pickup"
                 : currentRideStatus == 'ARRIVED'
-                ? "Arrived at pickup"
-                : "In transit to destination",
+                    ? "Arrived at pickup"
+                    : "In transit to destination",
           ),
         ),
       );
@@ -450,8 +475,7 @@ class RideController extends ChangeNotifier {
           Marker(
             markerId: MarkerId('candidate_driver_$index'),
             position: location,
-            icon:
-                _nearbyDriverMarkerIcon ??
+            icon: _nearbyDriverMarkerIcon ??
                 BitmapDescriptor.defaultMarkerWithHue(
                   BitmapDescriptor.hueOrange,
                 ),
@@ -523,6 +547,8 @@ class RideController extends ChangeNotifier {
     final picture = recorder.endRecording();
     final image = await picture.toImage(size.toInt(), size.toInt());
     final data = await image.toByteData(format: ui.ImageByteFormat.png);
+    // fromBytes is deprecated in some SDK versions; suppress the lint here.
+    // ignore: deprecated_member_use
     return BitmapDescriptor.fromBytes(data!.buffer.asUint8List());
   }
 
@@ -548,17 +574,16 @@ class RideController extends ChangeNotifier {
       _updateMarkersAndPolylines();
       notifyListeners();
 
-      _riderPositionSubscription =
-          Geolocator.getPositionStream(
-            locationSettings: const LocationSettings(
-              accuracy: LocationAccuracy.bestForNavigation,
-              distanceFilter: 10,
-            ),
-          ).listen((Position position) {
-            riderLocation = LatLng(position.latitude, position.longitude);
-            _updateMarkersAndPolylines();
-            notifyListeners();
-          });
+      _riderPositionSubscription = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          distanceFilter: 10,
+        ),
+      ).listen((Position position) {
+        riderLocation = LatLng(position.latitude, position.longitude);
+        _updateMarkersAndPolylines();
+        notifyListeners();
+      });
     } catch (e) {
       debugPrint('RideController: Failed to start rider tracking: $e');
     }
@@ -612,9 +637,8 @@ class RideController extends ChangeNotifier {
   ) async {
     try {
       await FirebaseFirestore.instance.runTransaction((tx) async {
-        final docRef = FirebaseFirestore.instance
-            .collection('rides')
-            .doc(rideId);
+        final docRef =
+            FirebaseFirestore.instance.collection('rides').doc(rideId);
         final snapshot = await tx.get(docRef);
         if (!snapshot.exists) return;
         final data = snapshot.data();

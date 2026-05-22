@@ -8,6 +8,7 @@ import '../models/user_model.dart';
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirestoreService _firestoreService = FirestoreService();
+  DateTime? _profileWriteBackoffUntil;
 
   // Stream to listen to the user's login state (logged in vs logged out)
   Stream<User?> get authStateChanges => _auth.authStateChanges();
@@ -39,6 +40,25 @@ class AuthService {
     }
   }
 
+  bool _isNonFatalFirestoreError(Object error) {
+    if (error is FirebaseException) {
+      return error.code == 'resource-exhausted' ||
+          error.code == 'deadline-exceeded' ||
+          error.code == 'unavailable';
+    }
+    return false;
+  }
+
+  bool _shouldBackOffProfileWrite() {
+    final until = _profileWriteBackoffUntil;
+    if (until == null) return false;
+    return DateTime.now().isBefore(until);
+  }
+
+  void _beginProfileWriteBackoff() {
+    _profileWriteBackoffUntil = DateTime.now().add(const Duration(minutes: 2));
+  }
+
   // 1. SIGN UP
   Future<User?> signUp(
     String name,
@@ -66,7 +86,17 @@ class AuthService {
           email: email,
           role: role,
         );
-        await _firestoreService.createUserProfile(newUser);
+        try {
+          await _firestoreService
+              .createUserProfile(newUser)
+              .timeout(const Duration(seconds: 8));
+        } catch (error) {
+          if (_isNonFatalFirestoreError(error) || error is TimeoutException) {
+            debugPrint('Signup profile write skipped: $error');
+          } else {
+            rethrow;
+          }
+        }
       }
       return user;
     } on TimeoutException {
@@ -118,6 +148,11 @@ class AuthService {
     required String role,
     String? name,
   }) async {
+    if (_shouldBackOffProfileWrite()) {
+      debugPrint('Profile upsert skipped: Firestore backoff window is active.');
+      return;
+    }
+
     final profile = UserModel(
       uid: user.uid,
       name: (name == null || name.trim().isEmpty)
@@ -126,7 +161,19 @@ class AuthService {
       email: user.email ?? '',
       role: role,
     );
-    await _firestoreService.upsertUserProfile(profile);
+    try {
+      await _firestoreService
+          .upsertUserProfile(profile)
+          .timeout(const Duration(seconds: 8));
+      _profileWriteBackoffUntil = null;
+    } catch (error) {
+      if (_isNonFatalFirestoreError(error) || error is TimeoutException) {
+        _beginProfileWriteBackoff();
+        debugPrint('Profile upsert skipped: $error');
+      } else {
+        rethrow;
+      }
+    }
   }
 
   // 3. LOGOUT

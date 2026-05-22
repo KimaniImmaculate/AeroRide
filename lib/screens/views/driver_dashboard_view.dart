@@ -1,1231 +1,881 @@
 import 'dart:async';
-import 'dart:math';
+import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:provider/provider.dart';
 
-import '../../controllers/ride_controller.dart';
-import '../../models/ride_request_model.dart';
-import '../../services/drivers_service.dart';
-import '../../services/firestore_service.dart';
+import '../../screens/driver/driver_profile_screen.dart';
 import '../../theme/aeroride_theme.dart';
-import '../../widgets/aeroride_components.dart';
 
-String displayRideStatus(String value) {
-  switch (value.toUpperCase()) {
-    case 'SEARCHING':
-      return 'Searching';
-    case 'ACCEPTED':
-      return 'Driver found';
-    case 'ARRIVED':
-      return 'Arrived';
-    case 'STARTED':
-      return 'In transit';
-    case 'COMPLETED':
-      return 'Completed';
-    case 'CANCELLED':
-      return 'Cancelled';
-    default:
-      return value;
-  }
+enum DriverRideState {
+  searchingRequests,
+  navigatingToPickup,
+  arrivedAtPickup,
+  passengerInTransit,
+  tripCompleted
 }
 
-class DriverHomeScreen extends StatefulWidget {
+class DriverDashboardView extends StatefulWidget {
   final User user;
-
-  const DriverHomeScreen({super.key, required this.user});
+  const DriverDashboardView({super.key, required this.user});
 
   @override
-  State<DriverHomeScreen> createState() => _DriverHomeScreenState();
+  State<DriverDashboardView> createState() => _DriverDashboardViewState();
 }
 
-class _DriverHomeScreenState extends State<DriverHomeScreen> {
-  final FirestoreService _firestoreService = FirestoreService();
-  final DriversService _driversService = DriversService();
-  late final RideController _journeyController;
+class _DriverDashboardViewState extends State<DriverDashboardView> {
+  GoogleMapController? _mapController;
+  DriverRideState _currentDriverState = DriverRideState.searchingRequests;
 
-  Timer? _arrivalWatcher;
-  String? _trackedRideId;
-  int _panelIndex = 0;
   bool _isOnline = false;
-  bool _busy = false;
+  LatLng _driverCurrentLocation =
+      const LatLng(-0.2831, 36.0664); // Defaults to Nakuru
 
-  @override
-  void initState() {
-    super.initState();
-    _journeyController = RideController();
-  }
+  Map<String, dynamic>? _activeRideData;
+  Timer? _simulationTimer;
+  double _transitProgress = 0.0;
+  int _etaMinutes = 5;
+
+  final Set<Polyline> _mapPolylines = {};
+  final Set<Marker> _mapMarkers = {};
+
+  final List<Map<String, dynamic>> _mockIncomingRidesPool = [
+    {
+      "id": "req_001",
+      "riderName": "Grace Otieno",
+      "pickupName": "Nakuru CBD - Westside Mall",
+      "destinationName": "Milimani Estate",
+      "pickupLatLng": const LatLng(-0.2831, 36.0664),
+      "destinationLatLng": const LatLng(-0.2750, 36.0700),
+      "fareKsh": 350.00,
+      "distanceKm": 2.4
+    },
+    {
+      "id": "req_002",
+      "riderName": "Kelvin Mwangi",
+      "pickupName": "Nairobi - Westlands (Sarit Centre)",
+      "destinationName": "Kilimani Area",
+      "pickupLatLng": const LatLng(-1.2644, 36.8044),
+      "destinationLatLng": const LatLng(-1.2912, 36.7846),
+      "fareKsh": 580.00,
+      "distanceKm": 4.1
+    },
+    {
+      "id": "req_003",
+      "riderName": "Aminah Hussein",
+      "pickupName": "Mombasa - Nyali Centre",
+      "destinationName": "Bamburi Beach Resort",
+      "pickupLatLng": const LatLng(-4.0275, 39.7022),
+      "destinationLatLng": const LatLng(-4.0041, 39.7188),
+      "fareKsh": 720.00,
+      "distanceKm": 5.8
+    }
+  ];
 
   @override
   void dispose() {
-    _arrivalWatcher?.cancel();
-    _journeyController.dispose();
+    _simulationTimer?.cancel();
+    _mapController?.dispose();
     super.dispose();
   }
 
-  Future<void> _toggleOnline() async {
-    if (_busy) return;
+  Future<void> _determineDriverGPSLocation() async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(color: Colors.white),
+      ),
+    );
 
-    setState(() => _busy = true);
     try {
-      if (_isOnline) {
-        await _driversService.stopLocationUpdates(widget.user.uid);
-        _arrivalWatcher?.cancel();
-        if (!mounted) return;
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (mounted) Navigator.pop(context);
+        _showErrorSnackbar('Location services are disabled on your device.');
+        return;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          if (mounted) Navigator.pop(context);
+          _showErrorSnackbar('Location permissions were denied.');
+          return;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        if (mounted) Navigator.pop(context);
+        _showErrorSnackbar('Location permissions are permanently blocked.');
+        return;
+      }
+
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+
+      if (mounted) {
+        Navigator.pop(context);
         setState(() {
-          _isOnline = false;
-          if (_trackedRideId == null) {
-            _panelIndex = 0;
-          }
-        });
-      } else {
-        await _driversService.startLocationUpdates(widget.user.uid);
-        if (!mounted) return;
-        setState(() {
+          _driverCurrentLocation =
+              LatLng(position.latitude, position.longitude);
           _isOnline = true;
-          _panelIndex = 1;
+          _rebuildMapElements();
         });
+
+        _mapController?.animateCamera(
+          CameraUpdate.newLatLngZoom(_driverCurrentLocation, 14.5),
+        );
       }
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Unable to update driver status: $error')),
+    } catch (e) {
+      if (mounted) Navigator.pop(context);
+      _showErrorSnackbar('Failed to acquire location coordinates: $e');
+    }
+  }
+
+  void _showErrorSnackbar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.redAccent),
+    );
+  }
+
+  Future<void> _showProfileSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 24,
+                      backgroundColor: Colors.black,
+                      child: Text(
+                        (widget.user.displayName?.isNotEmpty ?? false)
+                            ? widget.user.displayName![0].toUpperCase()
+                            : 'D',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.user.displayName ?? 'Driver',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 16,
+                            ),
+                          ),
+                          Text(
+                            widget.user.email ?? '',
+                            style: TextStyle(color: Colors.grey.shade600),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                _AccountActionTile(
+                  icon: Icons.account_circle_outlined,
+                  title: 'View full profile',
+                  subtitle: 'Edit driver details and preferences',
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    Navigator.of(this.context).push(
+                      MaterialPageRoute(
+                        builder: (context) =>
+                            DriverProfileScreen(user: widget.user),
+                      ),
+                    );
+                  },
+                ),
+                _AccountActionTile(
+                  icon: Icons.receipt_long_outlined,
+                  title: 'Trips',
+                  subtitle: 'Review completed rides and earnings',
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      const SnackBar(
+                          content: Text(
+                              'Trips view opens from your profile screen.')),
+                    );
+                  },
+                ),
+                _AccountActionTile(
+                  icon: Icons.account_balance_wallet_outlined,
+                  title: 'Wallet',
+                  subtitle: 'Check payouts and earnings balance',
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      const SnackBar(
+                          content:
+                              Text('Wallet is coming from the profile flow.')),
+                    );
+                  },
+                ),
+                _AccountActionTile(
+                  icon: Icons.support_agent_outlined,
+                  title: 'Support',
+                  subtitle: 'Get help or report an issue',
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      const SnackBar(
+                          content: Text('Support entry is not wired yet.')),
+                    );
+                  },
+                ),
+                const SizedBox(height: 16),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.logout_rounded),
+                  title: const Text('Sign out'),
+                  onTap: () async {
+                    Navigator.of(context).pop();
+                    await FirebaseAuth.instance.signOut();
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildTopStatusBanner() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+      child: Card(
+        color: Colors.black,
+        elevation: 1,
+        margin: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.circle,
+                    size: 11,
+                    color: !_isOnline
+                        ? Colors.redAccent
+                        : (_currentDriverState ==
+                                DriverRideState.searchingRequests
+                            ? Colors.greenAccent
+                            : Colors.orangeAccent),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    !_isOnline
+                        ? 'STATUS: OFFLINE'
+                        : (_currentDriverState ==
+                                DriverRideState.searchingRequests
+                            ? 'STATUS: ONLINE'
+                            : 'JOB IN PROGRESS'),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+              IconButton(
+                icon: const Icon(Icons.badge, color: Colors.white, size: 24),
+                tooltip: 'Driver Account Desk',
+                onPressed: _showProfileSheet,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _acceptRideRequest(Map<String, dynamic> selectedRide) {
+    setState(() {
+      _activeRideData = selectedRide;
+      _currentDriverState = DriverRideState.navigatingToPickup;
+
+      double distanceMeters = Geolocator.distanceBetween(
+        _driverCurrentLocation.latitude,
+        _driverCurrentLocation.longitude,
+        selectedRide['pickupLatLng'].latitude,
+        selectedRide['pickupLatLng'].longitude,
       );
-    } finally {
-      if (mounted) {
-        setState(() => _busy = false);
-      }
-    }
-  }
-
-  Future<void> _acceptRide(RideRequest ride) async {
-    if (_busy || ride.id == null) return;
-
-    setState(() => _busy = true);
-    try {
-      await _firestoreService.acceptRide(
-        rideId: ride.id!,
-        driverId: widget.user.uid,
-      );
-      if (!mounted) return;
-      _attachActiveRide(ride);
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Could not accept ride: $error')));
-    } finally {
-      if (mounted) {
-        setState(() => _busy = false);
-      }
-    }
-  }
-
-  void _attachActiveRide(RideRequest ride) {
-    if (ride.id == null) return;
-
-    if (_trackedRideId != ride.id) {
-      _trackedRideId = ride.id;
-      _journeyController.listenToLiveRide(ride.id!);
-      _startArrivalWatcher(ride.id!);
-    }
-
-    if (mounted) {
-      setState(() => _panelIndex = ride.status == 'completed' ? 2 : 1);
-    }
-  }
-
-  void _startArrivalWatcher(String rideId) {
-    _arrivalWatcher?.cancel();
-    _arrivalWatcher = Timer.periodic(const Duration(seconds: 6), (_) {
-      _checkJourneyProgress(rideId);
+      _etaMinutes = ((distanceMeters / 1000) * 2).round().clamp(2, 25);
     });
-    _checkJourneyProgress(rideId);
+
+    _rebuildMapElements();
+    _zoomToFitPoints(_driverCurrentLocation, selectedRide['pickupLatLng']);
+    _startNavigationSimulation(toPickup: true);
   }
 
-  Future<void> _checkJourneyProgress(String rideId) async {
-    try {
-      final rideSnapshot = await FirebaseFirestore.instance
-          .collection('rides')
-          .doc(rideId)
-          .get();
-      if (!rideSnapshot.exists || rideSnapshot.data() == null) {
+  void _startNavigationSimulation({required bool toPickup}) {
+    _simulationTimer?.cancel();
+    _transitProgress = 0.0;
+
+    LatLng startPosition = _driverCurrentLocation;
+    LatLng targetPosition = toPickup
+        ? _activeRideData!['pickupLatLng']
+        : _activeRideData!['destinationLatLng'];
+
+    _simulationTimer =
+        Timer.periodic(const Duration(milliseconds: 150), (timer) {
+      if (!mounted) {
+        timer.cancel();
         return;
       }
 
-      final ride = RideRequest.fromMap(rideSnapshot.data()!, rideSnapshot.id);
-      if (ride.driverId != widget.user.uid) {
-        return;
-      }
+      setState(() {
+        _transitProgress += 0.025;
+        if (_transitProgress >= 1.0) {
+          timer.cancel();
+          _driverCurrentLocation = targetPosition;
 
-      if (ride.status == 'completed' || ride.status == 'cancelled') {
-        _arrivalWatcher?.cancel();
-        return;
-      }
-
-      final driverSnapshot = await FirebaseFirestore.instance
-          .collection('drivers')
-          .doc(widget.user.uid)
-          .get();
-      final driverLocation =
-          driverSnapshot.data()?['current_location'] as GeoPoint?;
-      if (driverLocation == null) {
-        return;
-      }
-
-      final driverLat = driverLocation.latitude;
-      final driverLng = driverLocation.longitude;
-
-      if (ride.status == 'accepted') {
-        final distanceToPickup = _distanceMeters(
-          driverLat,
-          driverLng,
-          ride.pickupLocation.latitude,
-          ride.pickupLocation.longitude,
-        );
-
-        if (distanceToPickup <= 250) {
-          await _firestoreService.updateRideStatus(rideId, 'arrived');
-          if (mounted) {
-            setState(() => _panelIndex = 2);
+          if (toPickup) {
+            _currentDriverState = DriverRideState.arrivedAtPickup;
+            _etaMinutes = 0;
+          } else {
+            _currentDriverState = DriverRideState.tripCompleted;
+            _etaMinutes = 0;
           }
+        } else {
+          _driverCurrentLocation = _interpolatePoints(
+              startPosition, targetPosition, _transitProgress);
+          if (timer.tick % 12 == 0 && _etaMinutes > 1) _etaMinutes--;
         }
-        return;
-      }
 
-      if (ride.status == 'started') {
-        final distanceToDestination = _distanceMeters(
-          driverLat,
-          driverLng,
-          ride.destinationLocation.latitude,
-          ride.destinationLocation.longitude,
-        );
+        _rebuildMapElements();
+        _mapController
+            ?.animateCamera(CameraUpdate.newLatLng(_driverCurrentLocation));
+      });
+    });
+  }
 
-        if (distanceToDestination <= 250) {
-          if (mounted) {
-            setState(() => _panelIndex = 1);
-          }
-        }
-      }
-    } catch (_) {
-      // Keep the watcher silent. The next tick will retry.
+  void _startPassengerTransitTrip() {
+    if (_activeRideData == null) return;
+    setState(() {
+      _currentDriverState = DriverRideState.passengerInTransit;
+      _etaMinutes = (_activeRideData!['distanceKm'] * 2).round().clamp(3, 20);
+    });
+
+    _zoomToFitPoints(_activeRideData!['pickupLatLng'],
+        _activeRideData!['destinationLatLng']);
+    _startNavigationSimulation(toPickup: false);
+  }
+
+  void _resetDriverDashboard() {
+    setState(() {
+      _currentDriverState = DriverRideState.searchingRequests;
+      _activeRideData = null;
+      _mapPolylines.clear();
+      _mapMarkers.clear();
+    });
+    _determineDriverGPSLocation();
+  }
+
+  LatLng _interpolatePoints(LatLng start, LatLng end, double fraction) {
+    double lat = start.latitude + (end.latitude - start.latitude) * fraction;
+    double lng = start.longitude + (end.longitude - start.longitude) * fraction;
+    return LatLng(lat, lng);
+  }
+
+  void _rebuildMapElements() {
+    _mapMarkers.clear();
+    _mapPolylines.clear();
+
+    _mapMarkers.add(Marker(
+      markerId: const MarkerId('driver_vehicle_marker'),
+      position: _driverCurrentLocation,
+      icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
+      infoWindow: const InfoWindow(title: "Your Vehicle (Live GPS)"),
+    ));
+
+    if (_activeRideData != null) {
+      LatLng pickup = _activeRideData!['pickupLatLng'];
+      LatLng destination = _activeRideData!['destinationLatLng'];
+
+      _mapMarkers.add(Marker(
+        markerId: const MarkerId('rider_pickup_marker'),
+        position: pickup,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+        infoWindow:
+            InfoWindow(title: "Pickup: ${_activeRideData!['pickupName']}"),
+      ));
+
+      _mapMarkers.add(Marker(
+        markerId: const MarkerId('rider_destination_marker'),
+        position: destination,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+        infoWindow: InfoWindow(
+            title: "Dropoff: ${_activeRideData!['destinationName']}"),
+      ));
+
+      List<LatLng> points =
+          (_currentDriverState == DriverRideState.navigatingToPickup)
+              ? [_driverCurrentLocation, pickup]
+              : [pickup, destination];
+
+      _mapPolylines.add(Polyline(
+        polylineId: const PolylineId('driver_route_line'),
+        points: points,
+        color: Colors.blue.shade900,
+        width: 6,
+        jointType: JointType.round,
+      ));
     }
   }
 
-  double _distanceMeters(double lat1, double lng1, double lat2, double lng2) {
-    const earthRadius = 6371000.0;
-    final dLat = _degToRad(lat2 - lat1);
-    final dLng = _degToRad(lng2 - lng1);
-    final a =
-        (sin(dLat / 2) * sin(dLat / 2)) +
-        cos(_degToRad(lat1)) *
-            cos(_degToRad(lat2)) *
-            (sin(dLng / 2) * sin(dLng / 2));
-    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
-    return earthRadius * c;
-  }
+  void _zoomToFitPoints(LatLng start, LatLng end) {
+    if (_mapController == null) return;
+    double minLat =
+        start.latitude < end.latitude ? start.latitude : end.latitude;
+    double maxLat =
+        start.latitude > end.latitude ? start.latitude : end.latitude;
+    double minLng =
+        start.longitude < end.longitude ? start.longitude : end.longitude;
+    double maxLng =
+        start.longitude > end.longitude ? start.longitude : end.longitude;
 
-  double _degToRad(double degrees) => degrees * (pi / 180);
+    _mapController!.animateCamera(
+      CameraUpdate.newLatLngBounds(
+        LatLngBounds(
+          southwest: LatLng(minLat - 0.02, minLng - 0.02),
+          northeast: LatLng(maxLat + 0.02, maxLng + 0.02),
+        ),
+        60,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.grey.shade100,
       body: SafeArea(
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            // Fixed Top Duty Pill Status Banner
+            _buildTopStatusBanner(),
+
+            // TOP 50% HALF: Framed Map Box
+            Expanded(
+              flex: 5,
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                child: Stack(
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                        border:
+                            Border.all(color: Colors.grey.shade200, width: 1),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: GoogleMap(
+                        initialCameraPosition: CameraPosition(
+                            target: _driverCurrentLocation, zoom: 12.0),
+                        onMapCreated: (controller) =>
+                            _mapController = controller,
+                        markers: _mapMarkers,
+                        polylines: _mapPolylines,
+                        myLocationButtonEnabled: false,
+                        zoomControlsEnabled: true,
+                      ),
+                    ),
+                    Positioned(
+                      top: 12,
+                      right: 12,
+                      child: FloatingActionButton.small(
+                        heroTag: 'driver_profile_btn',
+                        backgroundColor: Colors.black,
+                        foregroundColor: Colors.white,
+                        elevation: 4,
+                        shape: const CircleBorder(),
+                        onPressed: _showProfileSheet,
+                        child: const Icon(Icons.badge, size: 20),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // BOTTOM 50% HALF: Clean Workflow Action Board Panel
+            Expanded(
+              flex: 5,
+              child: Container(
+                margin: const EdgeInsets.only(top: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                  boxShadow: [
+                    BoxShadow(
+                        color: Colors.black12, blurRadius: 8, spreadRadius: 1)
+                  ],
+                ),
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  child: !_isOnline
+                      ? _buildOfflinePanel()
+                      : _buildDriverWorkflowPanel(),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOfflinePanel() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 16),
+        const Text(
+          'You are currently Offline',
+          style: TextStyle(
+              fontWeight: FontWeight.w900, fontSize: 20, letterSpacing: -0.5),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'Declare yourself online to share your live device GPS location in the frame above and begin accepting active trip assignments.',
+          style: TextStyle(fontSize: 13, color: Colors.grey, height: 1.4),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 24),
+        ElevatedButton(
+          onPressed: _determineDriverGPSLocation,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.green.shade700,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            elevation: 1,
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.location_on, color: Colors.white),
+              SizedBox(width: 8),
+              Text('GO ONLINE / SHARE GPS LOCATION',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDriverWorkflowPanel() {
+    switch (_currentDriverState) {
+      case DriverRideState.searchingRequests:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Live Request Board',
+                  style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 19,
+                      letterSpacing: -0.5),
+                ),
+                TextButton.icon(
+                  onPressed: () => setState(() => _isOnline = false),
+                  icon: const Icon(Icons.power_settings_new,
+                      size: 16, color: Colors.red),
+                  label: const Text('GO OFFLINE',
+                      style: TextStyle(
+                          color: Colors.red,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12)),
+                )
+              ],
+            ),
+            const Text(
+              'Select an offer below to begin simulation sequence.',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _mockIncomingRidesPool.length,
+              itemBuilder: (context, index) {
+                final ride = _mockIncomingRidesPool[index];
+                return Card(
+                  margin: const EdgeInsets.symmetric(vertical: 6),
+                  elevation: 1,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: BorderSide(color: Colors.grey.shade200)),
+                  child: InkWell(
+                    onTap: () => _acceptRideRequest(ride),
+                    borderRadius: BorderRadius.circular(12),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12.0),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          const CircleAvatar(
+                            backgroundColor: Colors.black12,
+                            child: Icon(Icons.person, color: Colors.black87),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  ride['riderName'],
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 15),
+                                ),
+                                const SizedBox(height: 4),
+                                Text('🟢 From: ${ride['pickupName']}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 12)),
+                                Text('🔴 To: ${ride['destinationName']}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 12)),
+                                Text('📏 Distance: ${ride['distanceKm']} KM',
+                                    style: const TextStyle(
+                                        fontSize: 11, color: Colors.grey)),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                'KSh ${ride['fareKsh'].toStringAsFixed(0)}',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w900,
+                                    fontSize: 16,
+                                    color: Colors.green),
+                              ),
+                              const SizedBox(height: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                    color: Colors.black,
+                                    borderRadius: BorderRadius.circular(6)),
+                                child: const Text('ACCEPT',
+                                    style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold)),
+                              )
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        );
+
+      case DriverRideState.navigatingToPickup:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Navigating to Passenger...',
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 18,
+                            color: Colors.blue)),
+                    Text('Arriving at pickup point in $_etaMinutes Mins',
+                        style: const TextStyle(fontWeight: FontWeight.w500)),
+                  ],
+                ),
+                const Icon(Icons.directions_run, color: Colors.blue, size: 32),
+              ],
+            ),
+            const Divider(height: 24),
+            Text('PICKUP TARGET: ${_activeRideData?['pickupName']}',
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey)),
+            const SizedBox(height: 12),
+            LinearProgressIndicator(
+                value: _transitProgress, color: Colors.blue, minHeight: 5),
+          ],
+        );
+
+      case DriverRideState.arrivedAtPickup:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 12),
+            const Text('Arrived at Pickup Spot! 👋',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 19,
+                    color: Colors.green)),
+            const SizedBox(height: 6),
+            Text(
+                'Passenger: ${_activeRideData?['riderName']} is getting into your vehicle.',
+                style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: _startPassengerTransitTrip,
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(vertical: 14)),
+              child: const Text('Start Passenger Trip Transit',
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+
+      case DriverRideState.passengerInTransit:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Trip In Progress...',
+                    style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 17,
+                        color: Colors.orange)),
+                Text('Dest ETA: $_etaMinutes Mins',
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text('Dropping off at: ${_activeRideData?['destinationName']}',
+                style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            const SizedBox(height: 14),
+            LinearProgressIndicator(
+                value: _transitProgress, color: Colors.orange, minHeight: 5),
+          ],
+        );
+
+      case DriverRideState.tripCompleted:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 12),
+            const Text('Trip Completed Successfully! 🏁',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 19)),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                  color: Colors.green.shade50,
+                  borderRadius: BorderRadius.circular(12)),
               child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Driver dashboard',
-                        style: TextStyle(
-                          color: context.aeroTokens.primaryDarkBlue,
-                          fontSize: 20,
+                  const Text('Earnings Collected:',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  Text('KSh ${_activeRideData?['fareKsh'].toStringAsFixed(2)}',
+                      style: const TextStyle(
                           fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      Text(
-                        _isOnline ? 'Receiving trips' : 'Offline',
-                        style: TextStyle(
-                          color: _isOnline
-                              ? context.aeroTokens.successGreen
-                              : Colors.grey.shade600,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const Spacer(),
-                  TextButton.icon(
-                    onPressed: _busy ? null : _toggleOnline,
-                    style: TextButton.styleFrom(
-                      foregroundColor: _isOnline
-                          ? context.aeroTokens.successGreen
-                          : context.aeroTokens.primaryDarkBlue,
-                    ),
-                    icon: Icon(
-                      _isOnline ? Icons.toggle_on : Icons.toggle_off,
-                      size: 30,
-                    ),
-                    label: Text(_isOnline ? 'Online' : 'Offline'),
-                  ),
+                          fontSize: 20,
+                          color: Colors.green)),
                 ],
               ),
             ),
-            Expanded(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 220),
-                child: !_isOnline
-                    ? _DriverOfflinePanel(onToggleOnline: _toggleOnline)
-                    : _panelIndex == 0
-                    ? _DriverRequestPanel(
-                        firestoreService: _firestoreService,
-                        driverId: widget.user.uid,
-                        acceptRide: _acceptRide,
-                      )
-                    : _panelIndex == 1
-                    ? _DriverNavigationPanel(
-                        firestoreService: _firestoreService,
-                        journeyController: _journeyController,
-                        driverId: widget.user.uid,
-                        onRideDetected: _attachActiveRide,
-                        onAdvanceRide: (rideId, nextStatus) async {
-                          if (nextStatus == 'completed') {
-                            final rideSnapshot = await FirebaseFirestore
-                                .instance
-                                .collection('rides')
-                                .doc(rideId)
-                                .get();
-                            if (!rideSnapshot.exists ||
-                                rideSnapshot.data() == null) {
-                              return;
-                            }
-
-                            final ride = RideRequest.fromMap(
-                              rideSnapshot.data()!,
-                              rideSnapshot.id,
-                            );
-                            await _firestoreService
-                                .completeRideAndSettlePayment(
-                                  rideId: rideId,
-                                  riderId: ride.userId,
-                                  driverId: widget.user.uid,
-                                  fare: ride.estimatedCost,
-                                );
-                          } else {
-                            await _firestoreService.updateRideStatus(
-                              rideId,
-                              nextStatus,
-                            );
-                          }
-                        },
-                      )
-                    : _DriverArrivalPanel(
-                        firestoreService: _firestoreService,
-                        journeyController: _journeyController,
-                        driverId: widget.user.uid,
-                        onRideDetected: _attachActiveRide,
-                        onCompleteRide: (rideId) async {
-                          final rideSnapshot = await FirebaseFirestore.instance
-                              .collection('rides')
-                              .doc(rideId)
-                              .get();
-                          if (!rideSnapshot.exists ||
-                              rideSnapshot.data() == null) {
-                            return;
-                          }
-
-                          final ride = RideRequest.fromMap(
-                            rideSnapshot.data()!,
-                            rideSnapshot.id,
-                          );
-                          await _firestoreService.completeRideAndSettlePayment(
-                            rideId: rideId,
-                            riderId: ride.userId,
-                            driverId: widget.user.uid,
-                            fare: ride.estimatedCost,
-                          );
-                        },
-                      ),
-              ),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: _resetDriverDashboard,
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(vertical: 14)),
+              child: const Text('Return to Request Board',
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
             ),
           ],
-        ),
-      ),
-      bottomNavigationBar: SafeArea(
-        top: false,
-        child: NavigationBar(
-          selectedIndex: _panelIndex,
-          onDestinationSelected: (index) {
-            if (index == 0) {
-              if (_isOnline) {
-                setState(() => _panelIndex = index);
-              }
-              return;
-            }
-
-            if (_isOnline && _trackedRideId == null) {
-              setState(() => _panelIndex = index);
-            }
-          },
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.inbox_outlined),
-              selectedIcon: Icon(Icons.inbox),
-              label: 'Queue',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.navigation_outlined),
-              selectedIcon: Icon(Icons.navigation),
-              label: 'Journey',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.verified_outlined),
-              selectedIcon: Icon(Icons.verified),
-              label: 'Arrival',
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _DriverOfflinePanel extends StatelessWidget {
-  final Future<void> Function() onToggleOnline;
-
-  const _DriverOfflinePanel({required this.onToggleOnline});
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.aeroTokens;
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: AeroRidePanelCard(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.route_outlined,
-                size: 72,
-                color: tokens.primaryDarkBlue,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'You are offline',
-                style: TextStyle(
-                  color: tokens.primaryDarkBlue,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Go online to receive nearby ride requests and start live trip tracking.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey.shade600),
-              ),
-              const SizedBox(height: 18),
-              SizedBox(
-                width: double.infinity,
-                height: 54,
-                child: ElevatedButton(
-                  onPressed: onToggleOnline,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: tokens.primaryDarkBlue,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                  ),
-                  child: const Text(
-                    'Go Online',
-                    style: TextStyle(fontWeight: FontWeight.w900),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _DriverRequestPanel extends StatelessWidget {
-  final FirestoreService firestoreService;
-  final String driverId;
-  final Future<void> Function(RideRequest ride) acceptRide;
-
-  const _DriverRequestPanel({
-    required this.firestoreService,
-    required this.driverId,
-    required this.acceptRide,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.aeroTokens;
-    String displayStatus(String value) {
-      switch (value.toUpperCase()) {
-        case 'SEARCHING':
-          return 'Searching';
-        case 'ACCEPTED':
-          return 'Driver found';
-        case 'ARRIVED':
-          return 'Arrived';
-        case 'STARTED':
-          return 'In transit';
-        case 'COMPLETED':
-          return 'Completed';
-        case 'CANCELLED':
-          return 'Cancelled';
-        default:
-          return value;
-      }
+        );
     }
-
-    return StreamBuilder<List<RideRequest>>(
-      stream: firestoreService.watchDriverRequests(driverId),
-      builder: (context, snapshot) {
-        final requests = snapshot.data ?? [];
-
-        return SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 8),
-              _CountdownDial(seconds: 10),
-              const SizedBox(height: 18),
-              if (requests.isEmpty)
-                AeroRidePanelCard(
-                  child: Column(
-                    children: [
-                      Icon(
-                        Icons.hourglass_empty_rounded,
-                        color: tokens.primaryDarkBlue,
-                        size: 42,
-                      ),
-                      const SizedBox(height: 14),
-                      Text(
-                        'No incoming rides right now',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          color: tokens.primaryDarkBlue,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        'Stay online and AeroRide will push nearby requests here.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.grey.shade600),
-                      ),
-                    ],
-                  ),
-                )
-              else
-                ...requests.map(
-                  (ride) => Padding(
-                    padding: const EdgeInsets.only(bottom: 14),
-                    child: AeroRidePanelCard(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              CircleAvatar(
-                                radius: 24,
-                                backgroundColor: tokens.softSurface,
-                                child: Icon(
-                                  Icons.person,
-                                  color: tokens.primaryDarkBlue,
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'Ride request',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w800,
-                                        color: tokens.primaryDarkBlue,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      'Rider waiting nearby',
-                                      style: TextStyle(
-                                        color: Colors.grey.shade600,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 16),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: AeroRideMetricCard(
-                                  label: 'Fare',
-                                  value:
-                                      'KES ${ride.estimatedCost.toStringAsFixed(2)}',
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: AeroRideMetricCard(
-                                  label: 'Pickup',
-                                  value: 'Live',
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: AeroRideMetricCard(
-                                  label: 'Status',
-                                  value: ride.status.toUpperCase(),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 16),
-                          AeroRideInfoRow(
-                            label: 'Pickup Address',
-                            value: ride.pickupAddress,
-                          ),
-                          AeroRideInfoRow(
-                            label: 'Destination',
-                            value: ride.destinationAddress,
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: OutlinedButton(
-                                  onPressed: () async {
-                                    if (ride.id == null) return;
-                                    await firestoreService.updateRideStatus(
-                                      ride.id!,
-                                      'cancelled',
-                                    );
-                                  },
-                                  style: OutlinedButton.styleFrom(
-                                    side: BorderSide(color: tokens.mutedBorder),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(18),
-                                    ),
-                                    minimumSize: const Size.fromHeight(54),
-                                  ),
-                                  child: const Text(
-                                    'Decline',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                flex: 2,
-                                child: SizedBox(
-                                  height: 54,
-                                  child: ElevatedButton(
-                                    onPressed: () => acceptRide(ride),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: tokens.successGreen,
-                                      foregroundColor: Colors.white,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(18),
-                                      ),
-                                    ),
-                                    child: const Text(
-                                      'Accept',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w900,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        );
-      },
-    );
   }
 }
 
-class _DriverNavigationPanel extends StatelessWidget {
-  final FirestoreService firestoreService;
-  final RideController journeyController;
-  final String driverId;
-  final void Function(RideRequest ride) onRideDetected;
-  final Future<void> Function(String rideId, String nextStatus) onAdvanceRide;
+class _AccountActionTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
 
-  const _DriverNavigationPanel({
-    required this.firestoreService,
-    required this.journeyController,
-    required this.driverId,
-    required this.onRideDetected,
-    required this.onAdvanceRide,
+  const _AccountActionTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final tokens = context.aeroTokens;
-    return StreamBuilder<List<RideRequest>>(
-      stream: firestoreService.watchActiveDriverRides(driverId),
-      builder: (context, snapshot) {
-        final activeRide = snapshot.data == null || snapshot.data!.isEmpty
-            ? null
-            : snapshot.data!.first;
-
-        if (activeRide == null) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.route_outlined, size: 72, color: tokens.mutedBorder),
-                const SizedBox(height: 16),
-                Text(
-                  'No active journey yet',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: tokens.primaryDarkBlue,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          onRideDetected(activeRide);
-        });
-
-        return ListenableBuilder(
-          listenable: journeyController,
-          builder: (context, _) {
-            final rideStatus = journeyController.currentRideStatus
-                .toUpperCase();
-            final bannerLabel = rideStatus == 'ACCEPTED'
-                ? 'Arrive at Pickup'
-                : rideStatus == 'ARRIVED'
-                ? 'Start Trip'
-                : rideStatus == 'STARTED'
-                ? 'Waiting for rider confirmation'
-                : 'Journey Complete';
-
-            final nextStatus = rideStatus == 'ACCEPTED'
-                ? 'arrived'
-                : rideStatus == 'ARRIVED'
-                ? 'started'
-                : null;
-
-            return AeroRideMapShell(
-              map: GoogleMap(
-                initialCameraPosition: const CameraPosition(
-                  target: LatLng(-1.286389, 36.817223),
-                  zoom: 13.3,
-                ),
-                myLocationButtonEnabled: false,
-                zoomControlsEnabled: false,
-                compassEnabled: false,
-                markers: journeyController.markers,
-                polylines: journeyController.polylines,
-                onMapCreated: (controller) {
-                  journeyController.mapController = controller;
-                },
-              ),
-              overlays: [
-                Positioned(
-                  top: 16,
-                  left: 16,
-                  child: AeroRideStatusPill(
-                    label: 'Navigating',
-                    color: tokens.primaryDarkBlue,
-                  ),
-                ),
-                Positioned(
-                  top: 16,
-                  right: 16,
-                  child: AeroRideStatusPill(
-                    label: displayRideStatus(rideStatus),
-                    color: tokens.warningOrange,
-                  ),
-                ),
-                Positioned(
-                  left: 16,
-                  right: 16,
-                  top: 70,
-                  child: AeroRidePanelCard(
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                activeRide.pickupAddress,
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  color: tokens.primaryDarkBlue,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'Fare KES ${activeRide.estimatedCost.toStringAsFixed(2)}',
-                                style: TextStyle(
-                                  color: Colors.grey.shade600,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Icon(
-                          Icons.navigation_rounded,
-                          color: tokens.primaryDarkBlue,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                Positioned(
-                  left: 16,
-                  right: 16,
-                  bottom: 0,
-                  child: SafeArea(
-                    top: false,
-                    child: AeroRidePanelCard(
-                      radius: 28,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: AeroRideMetricCard(
-                                  label: 'Pickup',
-                                  value: activeRide.pickupAddress,
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: AeroRideMetricCard(
-                                  label: 'Destination',
-                                  value: activeRide.destinationAddress,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 18),
-                          AeroRideInfoRow(label: 'Driver', value: driverId),
-                          const SizedBox(height: 6),
-                          AeroRideTimeline(
-                            steps: [
-                              AeroRideTimelineStep(
-                                title: 'Accepted',
-                                subtitle: 'Driver assigned',
-                                completed: true,
-                              ),
-                              AeroRideTimelineStep(
-                                title: 'Arrived',
-                                subtitle: 'At pickup point',
-                                completed:
-                                    rideStatus == 'ARRIVED' ||
-                                    rideStatus == 'STARTED' ||
-                                    rideStatus == 'COMPLETED',
-                              ),
-                              AeroRideTimelineStep(
-                                title: 'In Transit',
-                                subtitle: 'Heading to destination',
-                                completed:
-                                    rideStatus == 'STARTED' ||
-                                    rideStatus == 'COMPLETED',
-                              ),
-                              AeroRideTimelineStep(
-                                title: 'Completed',
-                                subtitle: 'Trip finished',
-                                completed: rideStatus == 'COMPLETED',
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          SizedBox(
-                            width: double.infinity,
-                            height: 56,
-                            child: ElevatedButton(
-                              onPressed:
-                                  nextStatus == null || activeRide.id == null
-                                  ? null
-                                  : () => onAdvanceRide(
-                                      activeRide.id!,
-                                      nextStatus,
-                                    ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: tokens.successGreen,
-                                foregroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(18),
-                                ),
-                              ),
-                              child: Text(
-                                bannerLabel,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w900,
-                                  fontSize: 16,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            );
-          },
-        );
-      },
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(icon),
+      title: Text(title),
+      subtitle: Text(subtitle),
+      trailing: const Icon(Icons.chevron_right_rounded),
+      onTap: onTap,
     );
   }
-}
-
-class _DriverArrivalPanel extends StatelessWidget {
-  final FirestoreService firestoreService;
-  final RideController journeyController;
-  final String driverId;
-  final void Function(RideRequest ride) onRideDetected;
-  final Future<void> Function(String rideId) onCompleteRide;
-
-  const _DriverArrivalPanel({
-    required this.firestoreService,
-    required this.journeyController,
-    required this.driverId,
-    required this.onRideDetected,
-    required this.onCompleteRide,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.aeroTokens;
-    return StreamBuilder<List<RideRequest>>(
-      stream: firestoreService.watchActiveDriverRides(driverId),
-      builder: (context, snapshot) {
-        final activeRide = snapshot.data == null || snapshot.data!.isEmpty
-            ? null
-            : snapshot.data!.first;
-
-        if (activeRide == null) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.verified_outlined,
-                  size: 72,
-                  color: tokens.successGreen,
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'No completed trip yet',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: tokens.primaryDarkBlue,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          onRideDetected(activeRide);
-        });
-
-        return ListenableBuilder(
-          listenable: journeyController,
-          builder: (context, _) {
-            return AeroRideMapShell(
-              map: GoogleMap(
-                initialCameraPosition: const CameraPosition(
-                  target: LatLng(-1.286389, 36.817223),
-                  zoom: 13.3,
-                ),
-                myLocationButtonEnabled: false,
-                zoomControlsEnabled: false,
-                compassEnabled: false,
-                markers: journeyController.markers,
-                polylines: journeyController.polylines,
-                onMapCreated: (controller) {
-                  journeyController.mapController = controller;
-                },
-              ),
-              overlays: [
-                Positioned(
-                  top: 16,
-                  left: 16,
-                  child: AeroRideStatusPill(
-                    label: displayRideStatus(activeRide.status),
-                    color: tokens.successGreen,
-                  ),
-                ),
-                Positioned(
-                  left: 16,
-                  right: 16,
-                  bottom: 0,
-                  child: SafeArea(
-                    top: false,
-                    child: AeroRidePanelCard(
-                      radius: 28,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: AeroRideMetricCard(
-                                  label: 'Distance',
-                                  value: 'Live',
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: AeroRideMetricCard(
-                                  label: 'ETA',
-                                  value: 'Live',
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: AeroRideMetricCard(
-                                  label: 'Fare',
-                                  value:
-                                      'KES ${activeRide.estimatedCost.toStringAsFixed(2)}',
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 18),
-                          AeroRideTimeline(
-                            steps: [
-                              const AeroRideTimelineStep(
-                                title: 'Accepted',
-                                subtitle: 'Driver assigned',
-                                completed: true,
-                              ),
-                              AeroRideTimelineStep(
-                                title: 'Arrived',
-                                subtitle: 'At pickup point',
-                                completed:
-                                    activeRide.status == 'arrived' ||
-                                    activeRide.status == 'started' ||
-                                    activeRide.status == 'completed',
-                              ),
-                              AeroRideTimelineStep(
-                                title: 'In Transit',
-                                subtitle: 'Heading to destination',
-                                completed:
-                                    activeRide.status == 'started' ||
-                                    activeRide.status == 'completed',
-                              ),
-                              AeroRideTimelineStep(
-                                title: 'Completed',
-                                subtitle: 'Trip finished',
-                                completed: activeRide.status == 'completed',
-                              ),
-                            ],
-                          ),
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFEFFAF4),
-                              borderRadius: BorderRadius.circular(18),
-                              border: Border.all(
-                                color: tokens.successGreen.withValues(
-                                  alpha: 0.3,
-                                ),
-                              ),
-                            ),
-                            child: Text(
-                              activeRide.status == 'completed'
-                                  ? 'Trip complete. Payment can now be collected.'
-                                  : 'Keep the ride moving from accepted to arrived, started, and completed.',
-                              style: TextStyle(
-                                color: tokens.successGreen,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          SizedBox(
-                            width: double.infinity,
-                            height: 56,
-                            child: ElevatedButton(
-                              onPressed:
-                                  activeRide.status == 'completed' ||
-                                      activeRide.id == null
-                                  ? null
-                                  : () => onCompleteRide(activeRide.id!),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: tokens.successGreen,
-                                foregroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(18),
-                                ),
-                              ),
-                              child: const Text(
-                                'Complete Trip',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w900,
-                                  fontSize: 16,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-}
-
-class _CountdownDial extends StatelessWidget {
-  final int seconds;
-
-  const _CountdownDial({required this.seconds});
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.aeroTokens;
-    return Center(
-      child: Container(
-        width: 240,
-        height: 240,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          shape: BoxShape.circle,
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x180D2B52),
-              blurRadius: 32,
-              offset: Offset(0, 16),
-            ),
-          ],
-        ),
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            CustomPaint(
-              size: const Size(240, 240),
-              painter: _DialPainter(
-                baseColor: tokens.mutedBorder,
-                progressColor: tokens.warningOrange,
-                progress: 0.75,
-              ),
-            ),
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '$seconds',
-                  style: TextStyle(
-                    fontSize: 58,
-                    fontWeight: FontWeight.w900,
-                    color: tokens.primaryDarkBlue,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'seconds to respond',
-                  style: TextStyle(
-                    color: Colors.grey.shade600,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _DialPainter extends CustomPainter {
-  final Color baseColor;
-  final Color progressColor;
-  final double progress;
-
-  _DialPainter({
-    required this.baseColor,
-    required this.progressColor,
-    required this.progress,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2 - 16;
-    final stroke = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 16
-      ..strokeCap = StrokeCap.round;
-    stroke.color = baseColor;
-    canvas.drawArc(
-      Rect.fromCircle(center: center, radius: radius),
-      -2.3,
-      4.6,
-      false,
-      stroke,
-    );
-    stroke.shader = SweepGradient(
-      startAngle: -2.3,
-      endAngle: 2.3,
-      colors: [progressColor, const Color(0xFF14B8A6), const Color(0xFF0D2B52)],
-    ).createShader(Rect.fromCircle(center: center, radius: radius));
-    canvas.drawArc(
-      Rect.fromCircle(center: center, radius: radius),
-      -2.3,
-      4.6 * progress,
-      false,
-      stroke,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _DialPainter oldDelegate) =>
-      oldDelegate.progress != progress ||
-      oldDelegate.baseColor != baseColor ||
-      oldDelegate.progressColor != progressColor;
 }

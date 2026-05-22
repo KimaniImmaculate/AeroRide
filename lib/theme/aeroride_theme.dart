@@ -32,16 +32,16 @@ class AeroRideThemeTokens extends ThemeExtension<AeroRideThemeTokens> {
       softSurface = const Color(0xFFF1F5F9),
       mutedBorder = const Color(0xFFE2E8F0);
 
-  LinearGradient get oceanGradient => const LinearGradient(
+  LinearGradient get oceanGradient => LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF0D2B52), Color(0xFF00A4BA), Color(0xFF14B8A6)],
+    colors: [primaryDarkBlue, accentTealStart, accentTealEnd],
   );
 
-  LinearGradient get tealGradient => const LinearGradient(
+  LinearGradient get tealGradient => LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF00A4BA), Color(0xFF14B8A6)],
+    colors: [accentTealStart, accentTealEnd],
   );
 
   @override
@@ -115,6 +115,13 @@ class AeroRideTheme {
           fontWeight: FontWeight.w700,
           color: Color(0xFF0D2B52),
           letterSpacing: -0.2,
+        ),
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
         ),
       ),
       cardTheme: CardThemeData(

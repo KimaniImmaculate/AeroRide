@@ -9,6 +9,7 @@ import 'package:aeroride/services/mock_route_service.dart';
 class SimulationService {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
   static final Map<String, Timer> _movementTimers = {};
+  static const String _simulatedDriversCollection = 'simulatedDrivers';
 
   // Create simple simulated drivers around `center` and start moving them slowly.
   // Returns the created driver ids.
@@ -34,7 +35,12 @@ class SimulationService {
       final lat = center.latitude + latOffset;
       final lng = center.longitude + lonOffset;
 
-      await _db.collection('drivers').doc(id).set({
+      await _db.collection(_simulatedDriversCollection).doc(id).set({
+        'name': 'Sim Driver ${i + 1}',
+        'phone': '+254700000${i + 1}',
+        'vehicleModel': ['Toyota Prius', 'Honda Fit', 'Nissan Note'][i % 3],
+        'vehicleColor': ['Blue', 'White', 'Silver'][i % 3],
+        'rating': 4.7 + (i % 3) * 0.1,
         'current_location': GeoPoint(lat, lng),
         'isOnline': true,
         'updatedAt': Timestamp.now(),
@@ -59,7 +65,7 @@ class SimulationService {
       final dLng = (rnd.nextDouble() - 0.5) * 0.0002;
       pos = LatLng(pos.latitude + dLat, pos.longitude + dLng);
       try {
-        await _db.collection('drivers').doc(id).set({
+        await _db.collection(_simulatedDriversCollection).doc(id).set({
           'current_location': GeoPoint(pos.latitude, pos.longitude),
           'isOnline': true,
           'updatedAt': Timestamp.now(),
@@ -130,7 +136,10 @@ class SimulationService {
       pickup.longitude + 0.005,
     );
     try {
-      final doc = await _db.collection('drivers').doc(driverId).get();
+      final doc = await _db
+          .collection(_simulatedDriversCollection)
+          .doc(driverId)
+          .get();
       if (doc.exists && doc.data()?['current_location'] != null) {
         final gp = doc.data()!['current_location'] as GeoPoint;
         driverStart = LatLng(gp.latitude, gp.longitude);
@@ -168,10 +177,13 @@ class SimulationService {
           // Leg 1: Moving to pickup
           if (step < toPickupPoints.length) {
             final pos = toPickupPoints[step];
-            await _db.collection('drivers').doc(driverId).set({
-              'current_location': GeoPoint(pos.latitude, pos.longitude),
-              'updatedAt': Timestamp.now(),
-            }, SetOptions(merge: true));
+            await _db
+                .collection(_simulatedDriversCollection)
+                .doc(driverId)
+                .set({
+                  'current_location': GeoPoint(pos.latitude, pos.longitude),
+                  'updatedAt': Timestamp.now(),
+                }, SetOptions(merge: true));
             step++;
           } else {
             // Arrived at pickup
@@ -205,13 +217,16 @@ class SimulationService {
             step++;
           } else {
             // Arrived at destination
-            await _db.collection('drivers').doc(driverId).set({
-              'current_location': GeoPoint(
-                destination.latitude,
-                destination.longitude,
-              ),
-              'updatedAt': Timestamp.now(),
-            }, SetOptions(merge: true));
+            await _db
+                .collection(_simulatedDriversCollection)
+                .doc(driverId)
+                .set({
+                  'current_location': GeoPoint(
+                    destination.latitude,
+                    destination.longitude,
+                  ),
+                  'updatedAt': Timestamp.now(),
+                }, SetOptions(merge: true));
             leg = 4;
             timer.cancel();
             _rideSimulationTimer = null;

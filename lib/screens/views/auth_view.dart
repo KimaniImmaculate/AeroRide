@@ -233,14 +233,7 @@ class _AuthScreenState extends State<AuthScreen> {
 
     try {
       if (_isLogin) {
-        final user = await _authService.login(email, password);
-        if (user != null) {
-          await _authService.ensureUserProfileForRole(
-            user: user,
-            role: _roleValue,
-            name: name.isEmpty ? null : name,
-          );
-        }
+        await _authService.login(email, password);
       } else {
         final user = await _authService.signUp(
           name,

@@ -1,20 +1,33 @@
-import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'firebase_options.dart';
-import 'theme/aeroride_theme.dart';
-import 'services/notification_service.dart';
-import 'services/auth_service.dart';
-import 'screens/role_selection_screen.dart';
-import 'screens/views/rider_dashboard_view.dart';
-import 'screens/views/driver_dashboard_view.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+// Force absolute package mappings to resolve types cleanly
+import 'package:aeroride/controllers/ride_controller.dart';
+import 'package:aeroride/firebase_options.dart';
+import 'package:aeroride/screens/role_selection_screen.dart';
+import 'package:aeroride/screens/views/driver_dashboard_view.dart';
+import 'package:aeroride/screens/views/rider_dashboard_view.dart';
+import 'package:aeroride/services/auth_service.dart';
+import 'package:aeroride/services/notification_service.dart';
+import 'package:aeroride/theme/aeroride_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  await NotificationService().init();
+  unawaited(_initNotifications());
   runApp(const AeroRideApp());
+}
+
+Future<void> _initNotifications() async {
+  try {
+    await NotificationService().init().timeout(const Duration(seconds: 5));
+  } catch (error) {
+    debugPrint('Notification init skipped: $error');
+  }
 }
 
 class AeroRideApp extends StatelessWidget {
@@ -22,17 +35,29 @@ class AeroRideApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'AeroRide',
-      debugShowCheckedModeBanner: false,
-      theme: AeroRideTheme.light(),
-      home: const AuthWrapper(),
+    return ChangeNotifierProvider(
+      create: (_) => RideController(),
+      child: MaterialApp(
+        title: 'AeroRide',
+        debugShowCheckedModeBanner: false,
+        theme: AeroRideTheme.light(),
+        home: const AuthWrapper(),
+      ),
     );
   }
 }
 
-class AuthWrapper extends StatelessWidget {
+class AuthWrapper extends StatefulWidget {
   const AuthWrapper({super.key});
+
+  @override
+  State<AuthWrapper> createState() => _AuthWrapperState();
+}
+
+class _AuthWrapperState extends State<AuthWrapper> {
+  Future<DocumentSnapshot>? _profileFuture;
+  String? _cachedUid;
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<User?>(
@@ -46,12 +71,18 @@ class AuthWrapper extends StatelessWidget {
 
         if (authSnapshot.hasData && authSnapshot.data != null) {
           final user = authSnapshot.data!;
-          return FutureBuilder<DocumentSnapshot>(
-            future: FirebaseFirestore.instance
+
+          if (_cachedUid != user.uid) {
+            _cachedUid = user.uid;
+            _profileFuture = FirebaseFirestore.instance
                 .collection('users')
                 .doc(user.uid)
                 .get()
-                .timeout(const Duration(seconds: 10)),
+                .timeout(const Duration(seconds: 10));
+          }
+
+          return FutureBuilder<DocumentSnapshot>(
+            future: _profileFuture,
             builder: (context, userSnapshot) {
               if (userSnapshot.connectionState == ConnectionState.waiting) {
                 return const Scaffold(
@@ -79,9 +110,9 @@ class AuthWrapper extends StatelessWidget {
                 final role = userData['role'] ?? 'rider';
 
                 if (role == 'driver') {
-                  return DriverHomeScreen(user: user);
+                  return DriverDashboardView(user: user);
                 } else {
-                  return RiderHomeScreen(user: user);
+                  return RiderDashboardView(user: user);
                 }
               }
 

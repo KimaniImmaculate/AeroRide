@@ -21,13 +21,7 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
       _errorMsg = null;
     });
     try {
-      final user = await _authService.login(
-        _emailCtrl.text,
-        _passwordCtrl.text,
-      );
-      if (user != null) {
-        await _authService.ensureUserProfileForRole(user: user, role: 'driver');
-      }
+      await _authService.login(_emailCtrl.text, _passwordCtrl.text);
       if (mounted) {
         Navigator.of(context).popUntil((route) => route.isFirst);
       }

@@ -70,11 +70,11 @@ class DriversService {
     double radiusKm = 5.0,
   }) async {
     final cutoff = DateTime.now().subtract(const Duration(minutes: 5));
-
     final querySnapshot = await _db
         .collection('drivers')
         .where('isOnline', isEqualTo: true)
-        .get();
+        .get()
+        .timeout(const Duration(seconds: 4));
 
     final List<Map<String, dynamic>> results = [];
     for (final doc in querySnapshot.docs) {
@@ -111,34 +111,14 @@ class DriversService {
     int limit = 5,
   }) async {
     try {
-      final seenDriverIds = <String>{};
-      final allResults = <Map<String, dynamic>>[];
-
-      for (
-        double radius = initialRadiusKm;
-        radius <= maxRadiusKm;
-        radius += initialRadiusKm
-      ) {
-        final results = await getNearbyDrivers(lat, lng, radiusKm: radius);
-        for (final driver in results) {
-          final driverId = driver['driverId'] as String;
-          if (seenDriverIds.add(driverId)) {
-            allResults.add(driver);
-          }
-        }
-
-        allResults.sort(
-          (a, b) =>
-              (a['distanceKm'] as double).compareTo(b['distanceKm'] as double),
-        );
-
-        if (allResults.length >= limit) {
-          break;
-        }
-      }
-
+      final allResults = await getNearbyDrivers(
+        lat,
+        lng,
+        radiusKm: maxRadiusKm,
+      );
       return allResults.take(limit).toList();
-    } catch (_) {
+    } catch (error) {
+      debugPrint('DriversService: nearby lookup skipped: $error');
       return <Map<String, dynamic>>[];
     }
   }

@@ -6,6 +6,8 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geocoding/geocoding.dart';
 import '../controllers/ride_controller.dart';
 import '../services/auth_service.dart';
+import '../services/firestore_service.dart';
+import 'package:flutter/foundation.dart';
 
 class HomeScreen extends StatefulWidget {
   final User user;
@@ -64,20 +66,25 @@ class _HomeScreenState extends State<HomeScreen> {
       final places = await placemarkFromCoordinates(
         location.latitude,
         location.longitude,
-      );
+      ).timeout(const Duration(seconds: 5));
       if (places.isNotEmpty) {
         final p = places.first;
         final parts = <String>[];
-        if ((p.name ?? '').trim().isNotEmpty) parts.add(p.name!.trim());
-        if ((p.street ?? '').trim().isNotEmpty) parts.add(p.street!.trim());
+        if ((p.name ?? '').trim().isNotEmpty) {
+          parts.add(p.name!.trim());
+        }
+        if ((p.street ?? '').trim().isNotEmpty) {
+          parts.add(p.street!.trim());
+        }
         final label = parts.isEmpty
             ? '${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}'
             : parts.take(2).join(', ');
         setState(() {
-          if (isPickup)
+          if (isPickup) {
             _pickupPlaceName = label;
-          else
+          } else {
             _destinationPlaceName = label;
+          }
         });
       }
     } catch (_) {
@@ -239,6 +246,151 @@ class _HomeScreenState extends State<HomeScreen> {
                           child: const Text("Request Ride"),
                         ),
                       ] else ...[
+                        // When the rider has an active request and we're still
+                        // searching for drivers, surface candidate previews so
+                        // the rider can choose (simulation flows only).
+                        if ((kDebugMode) &&
+                            (_rideController.currentRideStatus ==
+                                    'REQUESTING...' ||
+                                _rideController.currentRideStatus ==
+                                    'SEARCHING') &&
+                            _rideController
+                                .nearbyDriverPreviews
+                                .isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          SizedBox(
+                            height: 120,
+                            child: ListView.builder(
+                              scrollDirection: Axis.horizontal,
+                              itemCount:
+                                  _rideController.nearbyDriverPreviews.length,
+                              itemBuilder: (context, index) {
+                                final preview =
+                                    _rideController.nearbyDriverPreviews[index];
+                                final raw =
+                                    preview['raw'] as Map<String, dynamic>?;
+                                final driverId = preview['driverId'] as String?;
+                                final name = raw != null && raw['name'] != null
+                                    ? raw['name'] as String
+                                    : (driverId ?? 'Driver');
+                                final phone =
+                                    raw != null && raw['phone'] != null
+                                    ? raw['phone'] as String
+                                    : null;
+
+                                return Padding(
+                                  padding: const EdgeInsets.only(right: 12.0),
+                                  child: Container(
+                                    width: 260,
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(12),
+                                      boxShadow: const [
+                                        BoxShadow(
+                                          blurRadius: 8,
+                                          color: Colors.black12,
+                                        ),
+                                      ],
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          name,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          'Distance: ${preview['distanceKm']?.toStringAsFixed(2) ?? '-'} km',
+                                          style: const TextStyle(
+                                            color: Colors.grey,
+                                          ),
+                                        ),
+                                        const Spacer(),
+                                        Row(
+                                          children: [
+                                            if (phone != null)
+                                              TextButton(
+                                                onPressed: () {
+                                                  ScaffoldMessenger.of(
+                                                    context,
+                                                  ).showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(
+                                                        'Simulation: would call $phone',
+                                                      ),
+                                                    ),
+                                                  );
+                                                },
+                                                child: const Text('Call'),
+                                              ),
+                                            if (phone != null)
+                                              TextButton(
+                                                onPressed: () {
+                                                  ScaffoldMessenger.of(
+                                                    context,
+                                                  ).showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(
+                                                        'Simulation: would text $phone',
+                                                      ),
+                                                    ),
+                                                  );
+                                                },
+                                                child: const Text('Text'),
+                                              ),
+                                            const Spacer(),
+                                            ElevatedButton(
+                                              onPressed:
+                                                  _rideController
+                                                          .activeRideId ==
+                                                      null
+                                                  ? null
+                                                  : () async {
+                                                      if (_rideController
+                                                              .activeRideId ==
+                                                          null) {
+                                                        return;
+                                                      }
+                                                      final messenger =
+                                                          ScaffoldMessenger.of(
+                                                            context,
+                                                          );
+                                                      try {
+                                                        final fs =
+                                                            FirestoreService();
+                                                        await fs.acceptRide(
+                                                          rideId: _rideController
+                                                              .activeRideId!,
+                                                          driverId: driverId!,
+                                                        );
+                                                      } catch (e) {
+                                                        messenger.showSnackBar(
+                                                          SnackBar(
+                                                            content: Text(
+                                                              'Could not assign driver: $e',
+                                                            ),
+                                                          ),
+                                                        );
+                                                      }
+                                                    },
+                                              child: const Text('Assign'),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 8),
                         const Text(
                           "RIDE ACTIVE",
                           style: TextStyle(
