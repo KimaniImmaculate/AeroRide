@@ -1,11 +1,16 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:geocoding/geocoding.dart' as geo;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:flutter_polyline_points/flutter_polyline_points.dart';
+import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 
 import '../../controllers/ride_controller.dart';
@@ -16,6 +21,9 @@ import '../../services/firestore_service.dart';
 import '../../theme/aeroride_theme.dart';
 import '../../utils/currency.dart';
 import '../../widgets/aeroride_components.dart';
+import 'support_view.dart';
+import 'wallet_view.dart';
+import '../role_selection_screen.dart';
 
 enum RideState {
   idle,
@@ -29,8 +37,10 @@ enum RideState {
   payment
 }
 
+enum TravelPhase { driverToRider, riderToDestination }
+
 class RiderDashboardView extends StatefulWidget {
-  final User user;
+  final dynamic user;
   const RiderDashboardView({super.key, required this.user});
 
   @override
@@ -38,6 +48,9 @@ class RiderDashboardView extends StatefulWidget {
 }
 
 class _RiderDashboardViewState extends State<RiderDashboardView> {
+  static const String googleMapsApiKey =
+      'AIzaSyANuwPwm1dRFvh_ySIIiW22-dWnUsMrp0k';
+
   late RideController _rideController;
   GoogleMapController? _mapController;
 
@@ -62,12 +75,20 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
   double _movingProgress = 0.0;
   Timer? _simulationTimer;
+  Timer? _inTransitTimer;
+  List<LatLng> _actualRoadPoints = [];
+  int _currentWaypointIndex = 0;
+  double _liveTraveledDistanceKm = 0.0;
+  double _liveRunningFareKsh = 100.0;
+  double _liveDriverEarningsKsh = 0.0;
   int _etaMinutes = 5;
   double _calculatedFareKsh = 0.0;
+  String? _currentRideDocumentId;
 
   Map<String, dynamic>? _selectedDriver;
   List<Map<String, dynamic>> _availableDriversPool = [];
   final Set<Polyline> _mapPolylines = {};
+  final Set<Marker> _mapMarkers = {};
 
   @override
   void initState() {
@@ -96,6 +117,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
   @override
   void dispose() {
     _simulationTimer?.cancel();
+    _inTransitTimer?.cancel();
     _mapController?.dispose();
     _pickupTextController.dispose();
     _destinationTextController.dispose();
@@ -107,6 +129,30 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       _mapPolylines.clear();
       _destinationLocation = null;
     });
+  }
+
+  Future<void> _handleMapTap(LatLng tappedCoordinate) async {
+    if (!_isPickingFromMap) return;
+
+    setState(() {
+      if (_mapPinTarget == 'pickup') {
+        _riderLocation = tappedCoordinate;
+        _pickupAddressString =
+            'Pinned Location (${tappedCoordinate.latitude.toStringAsFixed(4)}, ${tappedCoordinate.longitude.toStringAsFixed(4)})';
+        _pickupTextController.text = _pickupAddressString;
+      } else {
+        _destinationLocation = tappedCoordinate;
+        _destinationAddressString =
+            'Pinned Location (${tappedCoordinate.latitude.toStringAsFixed(4)}, ${tappedCoordinate.longitude.toStringAsFixed(4)})';
+        _destinationTextController.text = _destinationAddressString;
+      }
+
+      _isPickingFromMap = false;
+    });
+
+    if (_riderLocation != null && _destinationLocation != null) {
+      await _calculateRouteAndPricing(_riderLocation!, _destinationLocation!);
+    }
   }
 
   // Uses device hardware to snap current coordinates automatically
@@ -284,7 +330,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
         _currentRideState = RideState.driverSelection;
       });
 
-      _generateRoutePolylines(_riderLocation!, _destinationLocation!);
+      await _calculateRouteAndPricing(_riderLocation!, _destinationLocation!);
     } catch (e) {
       _showToastError(
           "Could not calculate route. Please try typing another location nearby.");
@@ -310,29 +356,133 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
     return LatLng(lat, lng);
   }
 
-  void _generateRoutePolylines(LatLng start, LatLng end) {
-    _mapPolylines.clear();
-    List<LatLng> routePoints = [
-      start,
-      LatLng((start.latitude + end.latitude) / 2 + 0.001,
-          (start.longitude + end.longitude) / 2 - 0.001),
-      end
-    ];
+  Future<void> _calculateRouteAndPricing(
+      LatLng origin, LatLng destination) async {
+    final url =
+        'https://maps.googleapis.com/maps/api/directions/json?origin=${origin.latitude},${origin.longitude}&destination=${destination.latitude},${destination.longitude}&key=$googleMapsApiKey';
 
-    setState(() {
-      _mapPolylines.add(
-        Polyline(
-          polylineId: const PolylineId('ride_route'),
-          points: routePoints,
-          color: Colors.black,
-          width: 5,
-          jointType: JointType.round,
-          consumeTapEvents:
-              false, // Core Web Fix: Stops polyline from consuming click gestures
+    try {
+      final response = await http.get(Uri.parse(url));
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+      if (data['status'] == 'OK') {
+        final route = data['routes'][0] as Map<String, dynamic>;
+        final leg = route['legs'][0] as Map<String, dynamic>;
+        final distanceMeters = leg['distance']['value'] as int;
+        final durationSeconds = leg['duration']['value'] as int;
+
+        final distanceKm = distanceMeters / 1000.0;
+        final durationMins = durationSeconds / 60.0;
+
+        const baseFare = 100.0;
+        const costPerKm = 45.0;
+        const costPerMin = 3.0;
+        final totalFare =
+            baseFare + (distanceKm * costPerKm) + (durationMins * costPerMin);
+
+        final encodedPolyline = route['overview_polyline']['points'] as String;
+        final decodedPoints = PolylinePoints.decodePolyline(encodedPolyline);
+        final roadRoute = decodedPoints
+            .map((point) => LatLng(point.latitude, point.longitude))
+            .toList();
+
+        if (!mounted) return;
+
+        setState(() {
+          _actualRoadPoints = roadRoute;
+          _calculatedFareKsh = totalFare.clamp(200.0, 5000.0);
+          _mapPolylines.clear();
+          _mapPolylines.add(
+            Polyline(
+              polylineId: const PolylineId('road_route'),
+              points: roadRoute,
+              color: Colors.black,
+              width: 5,
+              consumeTapEvents: false,
+            ),
+          );
+          _currentRideState = RideState.driverSelection;
+        });
+
+        _zoomToFitRoute(origin, destination);
+      }
+    } catch (e) {
+      debugPrint('Routing engine failed: $e');
+    }
+  }
+
+  Widget _buildSuggestedDestinationsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'Popular Nakuru destinations',
+          style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
         ),
-      );
-    });
-    _zoomToFitRoute(start, end);
+        const SizedBox(height: 10),
+        StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance
+              .collection('suggested_destinations')
+              .orderBy('popularity', descending: true)
+              .limit(3)
+              .snapshots(),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            if (snapshot.data!.docs.isEmpty) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Text('No nearby suggestions found.'),
+              );
+            }
+
+            return ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: snapshot.data!.docs.length,
+              itemBuilder: (context, index) {
+                final doc = snapshot.data!.docs[index];
+                final data = doc.data() as Map<String, dynamic>;
+                final GeoPoint geo = data['location'] as GeoPoint;
+                final String destinationName =
+                    (data['name'] ?? 'Suggested destination').toString();
+
+                return ListTile(
+                  onTap: () async {
+                    final origin = _riderLocation ??
+                        _rideController.riderLocation ??
+                        const LatLng(-0.2831, 36.0664);
+                    final dest = LatLng(geo.latitude, geo.longitude);
+
+                    setState(() {
+                      _destinationLocation = dest;
+                      _destinationAddressString = destinationName;
+                      _destinationTextController.text = destinationName;
+                      _currentRideState = RideState.driverSelection;
+                    });
+
+                    await _calculateRouteAndPricing(origin, dest);
+                  },
+                  leading: const CircleAvatar(
+                    backgroundColor: Colors.black12,
+                    child: Icon(Icons.location_on,
+                        color: Colors.black87, size: 18),
+                  ),
+                  title: Text(
+                    destinationName,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 14),
+                  ),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 14),
+                );
+              },
+            );
+          },
+        ),
+      ],
+    );
   }
 
   void _zoomToFitRoute(LatLng start, LatLng end) {
@@ -367,6 +517,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
     final rideRequestRef =
         FirebaseFirestore.instance.collection('ride_requests').doc();
+    _currentRideDocumentId = rideRequestRef.id;
     rideRequestRef.set({
       'id': rideRequestRef.id,
       'riderId': widget.user.uid,
@@ -381,6 +532,30 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       'createdAt': FieldValue.serverTimestamp(),
     });
 
+    FirebaseFirestore.instance.collection('rides').doc(rideRequestRef.id).set({
+      'id': rideRequestRef.id,
+      'riderId': widget.user.uid,
+      'riderName': widget.user.displayName ?? 'AeroRide User',
+      'driverName': driver['name'],
+      'driverId': driver['id'] ?? 'driver_demo',
+      'pickup': GeoPoint(_riderLocation!.latitude, _riderLocation!.longitude),
+      'pickupGeo':
+          GeoPoint(_riderLocation!.latitude, _riderLocation!.longitude),
+      'dropoff': GeoPoint(
+          _destinationLocation!.latitude, _destinationLocation!.longitude),
+      'dropoffGeo': GeoPoint(
+          _destinationLocation!.latitude, _destinationLocation!.longitude),
+      'currentVehicleLocation':
+          GeoPoint(_driverLocation!.latitude, _driverLocation!.longitude),
+      'liveFareCharged': _calculatedFareKsh,
+      'driverEarningsLive': 0,
+      'pickupAddress': _pickupAddressString,
+      'destinationName': _destinationAddressString,
+      'status': 'accepted',
+      'fareKsh': _calculatedFareKsh,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
     Timer(const Duration(seconds: 2), () {
       if (!mounted) return;
       rideRequestRef
@@ -390,39 +565,275 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
         _currentRideState = RideState.driverEnRoute;
       });
 
-      _movingProgress = 0.0;
-      LatLng initialDriverPos = _driverLocation!;
-      _simulationTimer =
-          Timer.periodic(const Duration(milliseconds: 100), (timer) {
-        if (!mounted) {
-          timer.cancel();
-          return;
-        }
-        setState(() {
-          _movingProgress += 0.02;
-          if (_movingProgress >= 1.0) {
-            timer.cancel();
-            _driverLocation = _riderLocation;
-            _currentRideState = RideState.driverArrived;
-            _etaMinutes = 0;
-
-            if (_rideController.onDriverArrived != null) {
-              _rideController.onDriverArrived!(
-                  driver['name'], driver['vehicle']);
-            }
-          } else {
-            _driverLocation = _interpolateCoordinates(
-                initialDriverPos, _riderLocation!, _movingProgress);
-            if (timer.tick % 15 == 0 && _etaMinutes > 1) _etaMinutes--;
-          }
-          _mapController!
-              .animateCamera(CameraUpdate.newLatLng(_driverLocation!));
-        });
-      });
+      unawaited(_fetchRoadRouteForPhase(
+        startPoint: _driverLocation!,
+        endPoint: _riderLocation!,
+        phase: TravelPhase.driverToRider,
+      ));
     });
   }
 
   void _startTripTransit() {
+    if (!mounted || _riderLocation == null || _destinationLocation == null) {
+      return;
+    }
+
+    unawaited(_fetchRoadRouteForPhase(
+      startPoint: _riderLocation!,
+      endPoint: _destinationLocation!,
+      phase: TravelPhase.riderToDestination,
+    ));
+  }
+
+  Future<void> _fetchRoadRouteForPhase({
+    required LatLng startPoint,
+    required LatLng endPoint,
+    required TravelPhase phase,
+  }) async {
+    final url =
+        'https://maps.googleapis.com/maps/api/directions/json?origin=${startPoint.latitude},${startPoint.longitude}&destination=${endPoint.latitude},${endPoint.longitude}&key=$googleMapsApiKey';
+
+    try {
+      final response = await http.get(Uri.parse(url));
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+      if (data['status'] == 'OK') {
+        final route = data['routes'][0] as Map<String, dynamic>;
+        final encodedPolyline = route['overview_polyline']['points'] as String;
+        final decodedPoints = PolylinePoints.decodePolyline(encodedPolyline);
+        final computedRoadCoordinates = decodedPoints
+            .map((point) => LatLng(point.latitude, point.longitude))
+            .toList();
+
+        if (!mounted) return;
+
+        setState(() {
+          _actualRoadPoints = computedRoadCoordinates;
+          _currentWaypointIndex = 0;
+
+          _mapPolylines.clear();
+          _mapPolylines.add(
+            Polyline(
+              polylineId: PolylineId(
+                phase == TravelPhase.driverToRider
+                    ? 'dispatch_route'
+                    : 'trip_route',
+              ),
+              points: computedRoadCoordinates,
+              color: phase == TravelPhase.driverToRider
+                  ? Colors.blueAccent
+                  : Colors.black,
+              width: 6,
+            ),
+          );
+        });
+
+        _zoomToFitRoute(startPoint, endPoint);
+        _startProgressiveInTransitSimulation(phase);
+      }
+    } catch (e) {
+      debugPrint('Phase routing failed: $e');
+    }
+  }
+
+  void _startProgressiveInTransitSimulation(TravelPhase phase) {
+    if (_actualRoadPoints.isEmpty) return;
+
+    _simulationTimer?.cancel();
+    _inTransitTimer?.cancel();
+    _currentWaypointIndex = 0;
+
+    if (phase == TravelPhase.riderToDestination) {
+      _liveTraveledDistanceKm = 0.0;
+      _liveRunningFareKsh = 100.0;
+      _liveDriverEarningsKsh = 0.0;
+    }
+
+    double calculateSegmentDistance(LatLng p1, LatLng p2) {
+      var p = 0.017453292519943295;
+      var a = 0.5 -
+          math.cos((p2.latitude - p1.latitude) * p) / 2 +
+          math.cos(p1.latitude * p) *
+              math.cos(p2.latitude * p) *
+              (1 - math.cos((p2.longitude - p1.longitude) * p)) /
+              2;
+      return 12742 * math.asin(math.sqrt(a));
+    }
+
+    setState(() {
+      _currentRideState = phase == TravelPhase.driverToRider
+          ? RideState.driverEnRoute
+          : RideState.inTransit;
+      _driverLocation = _actualRoadPoints.first;
+      _mapMarkers.removeWhere(
+          (marker) => marker.markerId.value == 'simulated_car_marker');
+      _mapMarkers.add(
+        Marker(
+          markerId: const MarkerId('simulated_car_marker'),
+          position: _actualRoadPoints.first,
+          icon:
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueYellow),
+          infoWindow: InfoWindow(
+            title: 'En Route',
+            snippet: 'Meter: KSh ${_liveRunningFareKsh.toStringAsFixed(0)}',
+          ),
+        ),
+      );
+    });
+
+    _inTransitTimer = Timer.periodic(const Duration(milliseconds: 400), (
+      timer,
+    ) {
+      if (_currentWaypointIndex >= _actualRoadPoints.length) {
+        timer.cancel();
+
+        if (phase == TravelPhase.riderToDestination) {
+          final rideDocumentId = _currentRideDocumentId;
+          if (rideDocumentId != null && rideDocumentId.isNotEmpty) {
+            unawaited(
+              FirebaseFirestore.instance
+                  .collection('rides')
+                  .doc(rideDocumentId)
+                  .update({
+                'status': 'completed',
+                'finalFareCharged': _liveRunningFareKsh.round(),
+                'driverEarnings': _liveDriverEarningsKsh.round(),
+                'driverEarningsLive': _liveDriverEarningsKsh.round(),
+                'totalDistanceKm':
+                    double.parse(_liveTraveledDistanceKm.toStringAsFixed(2)),
+                'currentVehicleLocation': GeoPoint(
+                  _actualRoadPoints.last.latitude,
+                  _actualRoadPoints.last.longitude,
+                ),
+                'liveFareCharged': _liveRunningFareKsh,
+                'completedAt': FieldValue.serverTimestamp(),
+              }),
+            );
+          }
+        } else {
+          final rideDocumentId = _currentRideDocumentId;
+          if (rideDocumentId != null && rideDocumentId.isNotEmpty) {
+            unawaited(
+              FirebaseFirestore.instance
+                  .collection('rides')
+                  .doc(rideDocumentId)
+                  .update({
+                'status': 'driver_arrived_pickup',
+                'currentVehicleLocation': GeoPoint(
+                  _actualRoadPoints.last.latitude,
+                  _actualRoadPoints.last.longitude,
+                ),
+              }),
+            );
+          }
+        }
+
+        if (!mounted) return;
+
+        setState(() {
+          if (_actualRoadPoints.isNotEmpty) {
+            _driverLocation = _actualRoadPoints.last;
+          }
+
+          if (phase == TravelPhase.driverToRider) {
+            _currentRideState = RideState.driverArrived;
+            _etaMinutes = 0;
+            if (_selectedDriver != null &&
+                _rideController.onDriverArrived != null) {
+              _rideController.onDriverArrived!(
+                _selectedDriver!['name'],
+                _selectedDriver!['vehicle'],
+              );
+            }
+          } else {
+            _currentRideState = RideState.arrivedAtDestination;
+            _calculatedFareKsh = _liveRunningFareKsh;
+          }
+
+          _mapMarkers.removeWhere(
+              (marker) => marker.markerId.value == 'simulated_car_marker');
+        });
+        return;
+      }
+
+      final currentVehiclePosition = _actualRoadPoints[_currentWaypointIndex];
+
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      setState(() {
+        if (_currentWaypointIndex > 0) {
+          final previousVehiclePosition =
+              _actualRoadPoints[_currentWaypointIndex - 1];
+          final segmentDistance = calculateSegmentDistance(
+            previousVehiclePosition,
+            currentVehiclePosition,
+          );
+
+          if (phase == TravelPhase.riderToDestination) {
+            _liveTraveledDistanceKm += segmentDistance;
+          }
+        }
+
+        if (phase == TravelPhase.riderToDestination) {
+          _liveRunningFareKsh = 100.0 + (_liveTraveledDistanceKm * 90.0);
+          _liveDriverEarningsKsh = _liveTraveledDistanceKm * 75.0;
+        }
+
+        _driverLocation = currentVehiclePosition;
+
+        _mapMarkers.removeWhere(
+            (marker) => marker.markerId.value == 'simulated_car_marker');
+        _mapMarkers.add(
+          Marker(
+            markerId: const MarkerId('simulated_car_marker'),
+            position: currentVehiclePosition,
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+                BitmapDescriptor.hueYellow),
+            infoWindow: InfoWindow(
+              title: 'En Route',
+              snippet: 'Meter: KSh ${_liveRunningFareKsh.toStringAsFixed(0)}',
+            ),
+          ),
+        );
+
+        final rideDocumentId = _currentRideDocumentId;
+        if (rideDocumentId != null && rideDocumentId.isNotEmpty) {
+          unawaited(
+            FirebaseFirestore.instance
+                .collection('rides')
+                .doc(rideDocumentId)
+                .update({
+              'status': phase == TravelPhase.riderToDestination
+                  ? 'inTransit'
+                  : 'driver_enroute_pickup',
+              'currentVehicleLocation': GeoPoint(
+                currentVehiclePosition.latitude,
+                currentVehiclePosition.longitude,
+              ),
+              'liveFareCharged': phase == TravelPhase.riderToDestination
+                  ? _liveRunningFareKsh.round()
+                  : 100,
+              'distanceElapsedKm':
+                  double.parse(_liveTraveledDistanceKm.toStringAsFixed(2)),
+              'driverEarningsLive': _liveDriverEarningsKsh,
+              'updatedAt': FieldValue.serverTimestamp(),
+            }),
+          );
+        }
+
+        _currentWaypointIndex++;
+      });
+
+      _mapController?.animateCamera(
+        CameraUpdate.newLatLng(currentVehiclePosition),
+      );
+    });
+  }
+
+  void _startTripTransitLegacy() {
     if (!mounted || _destinationLocation == null) return;
     setState(() {
       _currentRideState = RideState.inTransit;
@@ -517,6 +928,12 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                   onTap: () async {
                     Navigator.of(context).pop();
                     await FirebaseAuth.instance.signOut();
+                    if (!context.mounted) return;
+                    Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(
+                          builder: (context) => const RoleSelectionScreen()),
+                      (route) => false,
+                    );
                   },
                 ),
               ],
@@ -609,7 +1026,12 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                 'KSh 1,200 personal cash',
                 () {
                   Navigator.pop(context);
-                  _showToastError('Wallet screen is not connected yet.');
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const WalletView(),
+                    ),
+                  );
                 },
               ),
               _buildSheetActionRow(
@@ -627,15 +1049,19 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                 '24/7 client care lines',
                 () {
                   Navigator.pop(context);
-                  _showToastError('Support is not connected yet.');
+                  Navigator.of(this.context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const SupportView(),
+                    ),
+                  );
                 },
               ),
               const Divider(height: 24),
               TextButton.icon(
                 onPressed: () async {
+                  // Cleanly sign out from Firebase.
+                  // Your global main.dart AuthWrapper will catch this and safely take the user back.
                   await FirebaseAuth.instance.signOut();
-                  if (!ctx.mounted) return;
-                  Navigator.popUntil(ctx, (route) => route.isFirst);
                 },
                 icon:
                     const Icon(Icons.logout, color: Colors.redAccent, size: 18),
@@ -689,7 +1115,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       markers.add(Marker(
         markerId: const MarkerId('pickup_marker'),
         position: _riderLocation!,
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
         consumeTapEvents: false,
       ));
     }
@@ -709,11 +1135,13 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       markers.add(Marker(
         markerId: const MarkerId('moving_driver_car'),
         position: _driverLocation!,
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueYellow),
         infoWindow:
             InfoWindow(title: "Your Driver", snippet: "ETA: $_etaMinutes Mins"),
       ));
     }
+
+    markers.addAll(_mapMarkers);
 
     return markers;
   }
@@ -755,8 +1183,96 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                         polylines: _mapPolylines,
                         myLocationButtonEnabled: false,
                         zoomControlsEnabled: true,
+                        gestureRecognizers: <Factory<
+                            OneSequenceGestureRecognizer>>{
+                          Factory<OneSequenceGestureRecognizer>(
+                            () => EagerGestureRecognizer(),
+                          ),
+                        },
+                        onTap: _handleMapTap,
                       ),
                     ),
+
+                    if (_currentRideState == RideState.inTransit ||
+                        _currentWaypointIndex > 0)
+                      Positioned(
+                        top: 20,
+                        left: 20,
+                        right: 20,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 20, vertical: 14),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.9),
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Colors.black38,
+                                blurRadius: 10,
+                                offset: Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Text(
+                                    'LIVE TAXIMETER FARE',
+                                    style: TextStyle(
+                                      color: Colors.white54,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 1.2,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'KSh ${_liveRunningFareKsh.toStringAsFixed(0)}',
+                                    style: const TextStyle(
+                                      color: Colors.amber,
+                                      fontSize: 26,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              Container(
+                                height: 35,
+                                width: 1,
+                                color: Colors.white24,
+                              ),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Text(
+                                    'DISTANCE ELAPSED',
+                                    style: TextStyle(
+                                      color: Colors.white54,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 1.2,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '${_liveTraveledDistanceKm.toStringAsFixed(2)} KM',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
 
                     // Premium Hybrid Floating Avatar Button
                     Positioned(
@@ -939,6 +1455,8 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                   style: TextStyle(
                       color: Colors.white, fontWeight: FontWeight.bold)),
             ),
+            const SizedBox(height: 18),
+            _buildSuggestedDestinationsSection(),
           ],
         );
 
@@ -981,9 +1499,13 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        Text('KSh ${_calculatedFareKsh.toStringAsFixed(0)}',
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w900, fontSize: 16)),
+                        Text(
+                          _currentWaypointIndex > 0
+                              ? 'KSh ${_liveRunningFareKsh.toStringAsFixed(0)}'
+                              : 'KSh ${_calculatedFareKsh.toStringAsFixed(0)} (Est.)',
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w900, fontSize: 16),
+                        ),
                         Text('${driver['eta']} min away',
                             style: const TextStyle(
                                 color: Colors.green,

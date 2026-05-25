@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -6,36 +7,89 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:flutter_polyline_points/flutter_polyline_points.dart';
+import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 
 import '../../screens/driver/driver_profile_screen.dart';
+import 'support_view.dart';
+import 'wallet_view.dart';
 import '../../theme/aeroride_theme.dart';
+import '../role_selection_screen.dart';
+
+class MockRideRequest {
+  final String id;
+  final String riderName;
+  final String pickupName;
+  final String destinationName;
+  final LatLng pickupCoords;
+  final LatLng destinationCoords;
+  final double estimatedFare;
+
+  MockRideRequest({
+    required this.id,
+    required this.riderName,
+    required this.pickupName,
+    required this.destinationName,
+    required this.pickupCoords,
+    required this.destinationCoords,
+    required this.estimatedFare,
+  });
+}
 
 enum DriverRideState {
   searchingRequests,
   navigatingToPickup,
   arrivedAtPickup,
   passengerInTransit,
-  tripCompleted
+  tripCompleted,
 }
 
 class DriverDashboardView extends StatefulWidget {
-  final User user;
+  final dynamic user;
   const DriverDashboardView({super.key, required this.user});
 
   @override
   State<DriverDashboardView> createState() => _DriverDashboardViewState();
 }
 
+// ⚠️ FIXED: The variables were sitting here out in the open. They have been moved inside the class below.
+
 class _DriverDashboardViewState extends State<DriverDashboardView> {
   GoogleMapController? _mapController;
   DriverRideState _currentDriverState = DriverRideState.searchingRequests;
 
+  int _selectedTabIndex = 0; // 0 = Map, 1 = Profile
+
+  bool _isAwaitingPayment = false;
+  bool _paymentReceived = false;
+  bool _isProcessingPaymentPush = false;
+
+  Timer? _driverSimulationTimer;
+  List<LatLng> _driverActualRoadPoints = [];
+  int _driverWaypointIndex = 0;
+
+  double _driverTraveledDistanceKm = 0.0;
+  double _driverLiveEarningsKsh = 0.0;
+  double _passengerLiveFareKsh = 100.0;
+
+  List<MockRideRequest> _availableRequests = [];
+  MockRideRequest? _activeRequest;
   bool _isOnline = false;
-  LatLng _driverCurrentLocation =
-      const LatLng(-0.2831, 36.0664); // Defaults to Nakuru
+  bool _isSearchingForRides = false;
+  bool _hasIncomingRequest = false;
+  bool _isTripActive = false;
+  double _walletBalanceKsh =
+      1450.00; // Starting mock balance for the driver wallet
+
+  LatLng _driverCurrentLocation = const LatLng(-0.2831, 36.0664);
+
+  final LatLng _mockDriverCurrentLocation = const LatLng(-0.28496, 36.06795);
+  final LatLng _mockRiderPickupLocation = const LatLng(-0.28989, 36.05451);
+  final LatLng _mockRiderDestinationLocation = const LatLng(-0.26562, 36.04853);
 
   Map<String, dynamic>? _activeRideData;
+  String? activeRideDocId;
   Timer? _simulationTimer;
   double _transitProgress = 0.0;
   int _etaMinutes = 5;
@@ -43,106 +97,94 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   final Set<Polyline> _mapPolylines = {};
   final Set<Marker> _mapMarkers = {};
 
-  final List<Map<String, dynamic>> _mockIncomingRidesPool = [
-    {
-      "id": "req_001",
-      "riderName": "Grace Otieno",
-      "pickupName": "Nakuru CBD - Westside Mall",
-      "destinationName": "Milimani Estate",
-      "pickupLatLng": const LatLng(-0.2831, 36.0664),
-      "destinationLatLng": const LatLng(-0.2750, 36.0700),
-      "fareKsh": 350.00,
-      "distanceKm": 2.4
-    },
-    {
-      "id": "req_002",
-      "riderName": "Kelvin Mwangi",
-      "pickupName": "Nairobi - Westlands (Sarit Centre)",
-      "destinationName": "Kilimani Area",
-      "pickupLatLng": const LatLng(-1.2644, 36.8044),
-      "destinationLatLng": const LatLng(-1.2912, 36.7846),
-      "fareKsh": 580.00,
-      "distanceKm": 4.1
-    },
-    {
-      "id": "req_003",
-      "riderName": "Aminah Hussein",
-      "pickupName": "Mombasa - Nyali Centre",
-      "destinationName": "Bamburi Beach Resort",
-      "pickupLatLng": const LatLng(-4.0275, 39.7022),
-      "destinationLatLng": const LatLng(-4.0041, 39.7188),
-      "fareKsh": 720.00,
-      "distanceKm": 5.8
-    }
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _autoTriggerIncomingRideSearch();
+  }
 
   @override
   void dispose() {
+    _driverSimulationTimer?.cancel();
     _simulationTimer?.cancel();
     _mapController?.dispose();
     super.dispose();
   }
 
-  Future<void> _determineDriverGPSLocation() async {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(
-        child: CircularProgressIndicator(color: Colors.white),
-      ),
-    );
+  void _autoTriggerIncomingRideSearch() {
+    setState(() {
+      _isOnline = true;
+      _isSearchingForRides = true;
+      _availableRequests.clear();
+      _activeRequest = null;
+      _hasIncomingRequest = false;
+      _isTripActive = false;
 
-    try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        if (mounted) Navigator.pop(context);
-        _showErrorSnackbar('Location services are disabled on your device.');
-        return;
-      }
+      // ✅ CRITICAL REFRESH FLUSH LINE: Clear index tracker instantly
+      _driverWaypointIndex = 0;
+      _driverActualRoadPoints.clear();
+    });
 
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          if (mounted) Navigator.pop(context);
-          _showErrorSnackbar('Location permissions were denied.');
-          return;
-        }
-      }
-
-      if (permission == LocationPermission.deniedForever) {
-        if (mounted) Navigator.pop(context);
-        _showErrorSnackbar('Location permissions are permanently blocked.');
-        return;
-      }
-
-      Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
-
-      if (mounted) {
-        Navigator.pop(context);
-        setState(() {
-          _driverCurrentLocation =
-              LatLng(position.latitude, position.longitude);
-          _isOnline = true;
-          _rebuildMapElements();
-        });
-
-        _mapController?.animateCamera(
-          CameraUpdate.newLatLngZoom(_driverCurrentLocation, 14.5),
-        );
-      }
-    } catch (e) {
-      if (mounted) Navigator.pop(context);
-      _showErrorSnackbar('Failed to acquire location coordinates: $e');
-    }
+    Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      setState(() {
+        _isSearchingForRides = false;
+        _availableRequests = [
+          MockRideRequest(
+            id: 'TRIP_001',
+            riderName: 'Mary W.',
+            pickupName: 'Westside Mall Nakuru',
+            destinationName: 'Milimani Estate',
+            pickupCoords: const LatLng(-0.2872, 36.0617),
+            destinationCoords: const LatLng(-0.2743, 36.0692),
+            estimatedFare: 250.0,
+          ),
+          MockRideRequest(
+            id: 'TRIP_002',
+            riderName: 'John K.',
+            pickupName: 'Nakuru Main Stage',
+            destinationName: 'Section 58',
+            pickupCoords: const LatLng(-0.2899, 36.0712),
+            destinationCoords: const LatLng(-0.2845, 36.0941),
+            estimatedFare: 380.0,
+          ),
+          MockRideRequest(
+            id: 'TRIP_003',
+            riderName: 'David O.',
+            pickupName: 'Nakuru Blankets Factory',
+            destinationName: 'Lanet Corner',
+            pickupCoords: const LatLng(-0.2985, 36.0620),
+            destinationCoords: const LatLng(-0.2952, 36.1345),
+            estimatedFare: 620.0,
+          ),
+        ];
+        _hasIncomingRequest = _availableRequests.isNotEmpty;
+      });
+    });
   }
 
-  void _showErrorSnackbar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: Colors.redAccent),
-    );
+  // =========================================================================
+  // ✅ PLACED HERE: Your Simulated Payment Handler Method
+  // =========================================================================
+  void _triggerSimulatedRiderPayment() {
+    setState(() {
+      _isProcessingPaymentPush = true;
+    });
+
+    Timer(const Duration(seconds: 3), () {
+      if (mounted) {
+        setState(() {
+          _isAwaitingPayment = false;
+          _isProcessingPaymentPush = false;
+          _paymentReceived = true;
+
+          // Adds the ride's take-home pay straight into the wallet state balance!
+          _walletBalanceKsh += _driverLiveEarningsKsh;
+        });
+
+        _finalizeTripToCloudDatabase();
+      }
+    });
   }
 
   Future<void> _showProfileSheet() async {
@@ -193,13 +235,15 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                     ),
                   ],
                 ),
-                _AccountActionTile(
-                  icon: Icons.account_circle_outlined,
-                  title: 'View full profile',
-                  subtitle: 'Edit driver details and preferences',
-                  onTap: () {
-                    Navigator.of(context).pop();
-                    Navigator.of(this.context).push(
+                const SizedBox(height: 16),
+                _buildSheetActionRow(
+                  Icons.monetization_on_outlined,
+                  'Earnings & Cashouts',
+                  'Open earnings summary and payout tools',
+                  () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
                       MaterialPageRoute(
                         builder: (context) =>
                             DriverProfileScreen(user: widget.user),
@@ -207,54 +251,59 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                     );
                   },
                 ),
-                _AccountActionTile(
-                  icon: Icons.receipt_long_outlined,
-                  title: 'Trips',
-                  subtitle: 'Review completed rides and earnings',
-                  onTap: () {
-                    Navigator.of(context).pop();
-                    ScaffoldMessenger.of(this.context).showSnackBar(
-                      const SnackBar(
-                          content: Text(
-                              'Trips view opens from your profile screen.')),
+                _buildSheetActionRow(
+                  Icons.local_taxi,
+                  'Vehicle & Fleet Verification',
+                  'Review vehicle and fleet details',
+                  () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) =>
+                            DriverProfileScreen(user: widget.user),
+                      ),
                     );
                   },
                 ),
-                _AccountActionTile(
-                  icon: Icons.account_balance_wallet_outlined,
-                  title: 'Wallet',
-                  subtitle: 'Check payouts and earnings balance',
-                  onTap: () {
-                    Navigator.of(context).pop();
-                    ScaffoldMessenger.of(this.context).showSnackBar(
-                      const SnackBar(
-                          content:
-                              Text('Wallet is coming from the profile flow.')),
+                _buildSheetActionRow(
+                  Icons.support_agent,
+                  'Driver Operator Support',
+                  'Open dispatch support hub',
+                  () {
+                    Navigator.pop(context);
+                    Navigator.of(this.context).push(
+                      MaterialPageRoute(
+                        builder: (context) => const SupportView(),
+                      ),
                     );
                   },
                 ),
-                _AccountActionTile(
-                  icon: Icons.support_agent_outlined,
-                  title: 'Support',
-                  subtitle: 'Get help or report an issue',
-                  onTap: () {
-                    Navigator.of(context).pop();
-                    ScaffoldMessenger.of(this.context).showSnackBar(
-                      const SnackBar(
-                          content: Text('Support entry is not wired yet.')),
-                    );
-                  },
-                ),
-                const SizedBox(height: 16),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.logout_rounded),
-                  title: const Text('Sign out'),
-                  onTap: () async {
-                    Navigator.of(context).pop();
+                const Divider(height: 24),
+                TextButton.icon(
+                  onPressed: () async {
+                    // Cleanly sign out from Firebase.
+                    // The AuthWrapper in main.dart will reactively handle the screen swap safely.
                     await FirebaseAuth.instance.signOut();
                   },
+                  icon: const Icon(
+                    Icons.power_settings_new,
+                    color: Colors.redAccent,
+                    size: 18,
+                  ),
+                  label: const Text(
+                    'Go Offline & Sign Out',
+                    style: TextStyle(
+                      color: Colors.redAccent,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  style: TextButton.styleFrom(
+                    alignment: Alignment.centerLeft,
+                    padding: EdgeInsets.zero,
+                  ),
                 ),
+                const SizedBox(height: 10),
               ],
             ),
           ),
@@ -263,153 +312,301 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
     );
   }
 
-  void _showDriverQuickAccountSheet(BuildContext ctx) {
-    showModalBottomSheet(
-      context: ctx,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+  Future<void> _showDriverQuickAccountSheet(BuildContext ctx) async {
+    await _showProfileSheet();
+  }
+
+  Future<void> _determineDriverGPSLocation() async {
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings:
+            const LocationSettings(accuracy: LocationAccuracy.high),
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        _driverCurrentLocation = LatLng(position.latitude, position.longitude);
+        _isOnline = true;
+      });
+
+      _rebuildMapElements();
+      _mapController?.animateCamera(
+        CameraUpdate.newLatLng(_driverCurrentLocation),
+      );
+    } catch (e) {
+      debugPrint('Failed to determine driver GPS location: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to fetch GPS location right now.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
+  Widget _buildDriverWorkflowControls() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(24), topRight: Radius.circular(24)),
+        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 10)],
       ),
-      builder: (context) {
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade300,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // =========================================================================
+          // ✅ NEW SYSTEM PIECE: OFFLINE LOCKOUT STATUS NOTICE CARD
+          // =========================================================================
+          if (!_isOnline) ...[
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 30),
+                child: Column(
+                  children: [
+                    Icon(Icons.wifi_off_rounded,
+                        size: 44, color: Colors.grey.shade400),
+                    const SizedBox(height: 12),
+                    const Text("You are currently Offline",
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            color: Colors.black87)),
+                    const SizedBox(height: 6),
+                    const Text(
+                        "To see available ride requests in Nakuru and start earning money, please go to your Profile / Account tab and switch your status to Available.",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            fontSize: 12, color: Colors.black54, height: 1.4)),
+                  ],
                 ),
               ),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  CircleAvatar(
-                    radius: 26,
-                    backgroundColor: Colors.black12,
-                    child: Text(
-                      (widget.user.displayName?.isNotEmpty ?? false)
-                          ? widget.user.displayName![0].toUpperCase()
-                          : 'D',
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black,
+            ),
+          ],
+
+          // PHASE 1: SEARCHING ANIMATION (Only works if online)
+          if (_isOnline && _isSearchingForRides) ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: const [
+                SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.black)),
+                SizedBox(width: 12),
+                Expanded(
+                    child: Text("Scanning Nakuru for match alerts...",
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 13))),
+              ],
+            ),
+            const SizedBox(height: 4),
+          ],
+
+          // PHASE 2: MULTI-REQUEST MARKETPLACE LIST FEED (Only works if online)
+          if (_isOnline &&
+              _availableRequests.isNotEmpty &&
+              !_isTripActive &&
+              !_isAwaitingPayment &&
+              !_paymentReceived) ...[
+            Text("AVAILABLE RIDES NEARBY (${_availableRequests.length})",
+                style: const TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 11,
+                    color: Colors.black54,
+                    letterSpacing: 1)),
+            const SizedBox(height: 10),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 220),
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                child: Column(
+                  children: _availableRequests.map((request) {
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                          color: Colors.grey.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.black12)),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(request.riderName,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14)),
+                              Text(
+                                  "Est: KSh ${request.estimatedFare.toStringAsFixed(0)}",
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                      color: Colors.green,
+                                      fontSize: 13)),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text("From: ${request.pickupName}",
+                              style: const TextStyle(
+                                  fontSize: 11, color: Colors.black54),
+                              overflow: TextOverflow.ellipsis),
+                          Text("To: ${request.destinationName}",
+                              style: const TextStyle(
+                                  fontSize: 11, color: Colors.black54),
+                              overflow: TextOverflow.ellipsis),
+                          const SizedBox(height: 8),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.black,
+                                foregroundColor: Colors.white,
+                                minimumSize: const Size.fromHeight(36)),
+                            onPressed: () =>
+                                _startLocalDriverTripSimulation(request),
+                            child: const Text("ACCEPT JOB",
+                                style: TextStyle(
+                                    fontSize: 12, fontWeight: FontWeight.bold)),
+                          )
+                        ],
                       ),
-                    ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
+          ],
+
+          // PHASE 3: ACTIVE TRIP HUD PROGRESS
+          if (_isTripActive && _activeRequest != null) ...[
+            Text("CURRENT TRIP: ${_activeRequest!.riderName}",
+                style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 11,
+                    color: Colors.blue)),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.blue)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    "En route to ${_activeRequest!.destinationName}... Progress: ${_driverTraveledDistanceKm.toStringAsFixed(1)} KM",
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 12),
                   ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          widget.user.displayName ?? 'AeroRide Partner',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const Text(
-                          '★ 4.95 Rating • Gold Driver',
+                ),
+              ],
+            ),
+          ],
+
+          // PHASE 4: COLLECT PAYMENT GATEWAY CONTROL
+          if (_isAwaitingPayment && !_isProcessingPaymentPush) ...[
+            const Text("DESTINATION ARRIVED",
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 11,
+                    color: Colors.redAccent)),
+            const SizedBox(height: 4),
+            Text(
+                "Please request final trip remittance statement from ${_activeRequest?.riderName ?? 'Passenger'}.",
+                style: const TextStyle(fontSize: 12, color: Colors.black54)),
+            const SizedBox(height: 12),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size.fromHeight(45)),
+              onPressed: () => _triggerSimulatedRiderPayment(),
+              child: Text(
+                  "REQUEST PAYMENT (KSh ${_passengerLiveFareKsh.toStringAsFixed(0)})",
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+
+          // SIMULATED TRANSACTION NETWORK PING LOCKER
+          if (_isProcessingPaymentPush) ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: const [
+                SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.green)),
+                SizedBox(width: 14),
+                Text("Awaiting Rider Wallet transaction auth...",
+                    style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        color: Colors.black87)),
+              ],
+            ),
+            const SizedBox(height: 4),
+          ],
+
+          // PHASE 5: NOTIFICATION ALERTS DISPATCH & REBOOT SWEEP
+          if (_paymentReceived) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                  color: Colors.lightGreen.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.green.shade400, width: 1.5)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: const [
+                      Icon(Icons.sms, color: Colors.green, size: 20),
+                      SizedBox(width: 8),
+                      Text("IN-APP MESSAGE LOG",
                           style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.amber,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
+                              fontWeight: FontWeight.w900,
+                              fontSize: 11,
+                              color: Colors.green)),
+                    ],
                   ),
-                  IconButton(
-                    icon: const Icon(
-                      Icons.arrow_forward_ios,
-                      size: 16,
-                      color: Colors.grey,
-                    ),
-                    onPressed: () {
-                      Navigator.pop(context);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) =>
-                              DriverProfileScreen(user: widget.user),
-                        ),
-                      );
-                    },
+                  const SizedBox(height: 6),
+                  Text(
+                    "📩 Success! ${_activeRequest?.riderName ?? 'Passenger'} has paid KSh ${_passengerLiveFareKsh.toStringAsFixed(0)} via AeroRide Pay. Your balance earned (KSh ${_driverLiveEarningsKsh.toStringAsFixed(0)}) has been successfully added to your account ledger wallet.",
+                    style: const TextStyle(
+                        fontSize: 12,
+                        height: 1.4,
+                        color: Colors.black87,
+                        fontWeight: FontWeight.w500),
                   ),
                 ],
               ),
-              const Divider(height: 32),
-              _buildSheetActionRow(
-                Icons.monetization_on_outlined,
-                'Earnings & Cashouts',
-                "Today's Ledger Balance: KSh 3,450",
-                () {
-                  Navigator.pop(context);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) =>
-                          DriverProfileScreen(user: widget.user),
-                    ),
-                  );
-                },
-              ),
-              _buildSheetActionRow(
-                Icons.local_taxi,
-                'Vehicle & Fleet Verification',
-                'Toyota Fielder (KDG 512A)',
-                () {
-                  Navigator.pop(context);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) =>
-                          DriverProfileScreen(user: widget.user),
-                    ),
-                  );
-                },
-              ),
-              _buildSheetActionRow(
-                Icons.support_agent,
-                'Driver Operator Support',
-                'Direct support dispatch hub',
-                () {},
-              ),
-              const Divider(height: 24),
-              TextButton.icon(
-                onPressed: () async {
-                  await FirebaseAuth.instance.signOut();
-                  if (context.mounted) {
-                    Navigator.popUntil(context, (route) => route.isFirst);
-                  }
-                },
-                icon: const Icon(Icons.power_settings_new,
-                    color: Colors.redAccent, size: 18),
-                label: const Text(
-                  'Go Offline & Sign Out',
-                  style: TextStyle(
-                    color: Colors.redAccent,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                style: TextButton.styleFrom(
-                  alignment: Alignment.centerLeft,
-                  padding: EdgeInsets.zero,
-                ),
-              ),
-              const SizedBox(height: 10),
-            ],
-          ),
-        );
-      },
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.black,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size.fromHeight(42)),
+              onPressed: () {
+                setState(() {
+                  _paymentReceived = false;
+                });
+                _autoTriggerIncomingRideSearch();
+              },
+              child: const Text("GO BACK ONLINE / REFRESH JOB MARKET",
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            )
+          ]
+        ],
+      ),
     );
   }
 
@@ -493,6 +690,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   void _acceptRideRequest(Map<String, dynamic> selectedRide) {
     setState(() {
       _activeRideData = selectedRide;
+      activeRideDocId = selectedRide['id']?.toString();
       _currentDriverState = DriverRideState.navigatingToPickup;
 
       double distanceMeters = Geolocator.distanceBetween(
@@ -503,6 +701,32 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       );
       _etaMinutes = ((distanceMeters / 1000) * 2).round().clamp(2, 25);
     });
+
+    final rideDocId = activeRideDocId;
+    if (rideDocId != null && rideDocId.isNotEmpty) {
+      unawaited(
+        FirebaseFirestore.instance.collection('rides').doc(rideDocId).set({
+          'id': rideDocId,
+          'driverId': widget.user.uid,
+          'driverName': widget.user.displayName ?? 'Driver',
+          'status': 'accepted',
+          'pickupGeo': GeoPoint(
+            selectedRide['pickupLatLng'].latitude,
+            selectedRide['pickupLatLng'].longitude,
+          ),
+          'dropoffGeo': GeoPoint(
+            selectedRide['destinationLatLng'].latitude,
+            selectedRide['destinationLatLng'].longitude,
+          ),
+          'currentVehicleLocation': GeoPoint(
+            _driverCurrentLocation.latitude,
+            _driverCurrentLocation.longitude,
+          ),
+          'liveFareCharged': selectedRide['fareKsh'],
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true)),
+      );
+    }
 
     _rebuildMapElements();
     _zoomToFitPoints(_driverCurrentLocation, selectedRide['pickupLatLng']);
@@ -552,21 +776,162 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   }
 
   void _startPassengerTransitTrip() {
-    if (_activeRideData == null) return;
+    final selectedRequest = _activeRequest ??
+        (_availableRequests.isNotEmpty ? _availableRequests.first : null);
+    if (selectedRequest == null) return;
+
+    unawaited(_startLocalDriverTripSimulation(selectedRequest));
+  }
+
+  Future<void> _startLocalDriverTripSimulation(
+      MockRideRequest selectedRequest) async {
     setState(() {
-      _currentDriverState = DriverRideState.passengerInTransit;
-      _etaMinutes = (_activeRideData!['distanceKm'] * 2).round().clamp(3, 20);
+      _activeRequest = selectedRequest;
+      _activeRideData = {
+        'id': selectedRequest.id,
+        'riderName': selectedRequest.riderName,
+        'pickupName': selectedRequest.pickupName,
+        'destinationName': selectedRequest.destinationName,
+        'pickupLatLng': selectedRequest.pickupCoords,
+        'destinationLatLng': selectedRequest.destinationCoords,
+        'fareKsh': selectedRequest.estimatedFare,
+      };
+      _isTripActive = true;
+      _hasIncomingRequest = false;
+      _availableRequests.clear();
+      activeRideDocId = selectedRequest.id;
+      _driverWaypointIndex = 0;
+      _driverTraveledDistanceKm = 0.0;
+      _driverLiveEarningsKsh = 0.0;
+      _passengerLiveFareKsh = 100.0;
     });
 
-    _zoomToFitPoints(_activeRideData!['pickupLatLng'],
-        _activeRideData!['destinationLatLng']);
-    _startNavigationSimulation(toPickup: false);
+    final pickupLatLng = selectedRequest.pickupCoords;
+    final destinationLatLng = selectedRequest.destinationCoords;
+
+    final url =
+        'https://maps.googleapis.com/maps/api/directions/json?origin=${pickupLatLng.latitude},${pickupLatLng.longitude}&destination=${destinationLatLng.latitude},${destinationLatLng.longitude}&key=AIzaSyANuwPwm1dRFvh_ySIIiW22-dWnUsMrp0k';
+
+    try {
+      final response = await http.get(Uri.parse(url));
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+      if (data['status'] == 'OK') {
+        final encodedPolyline =
+            data['routes'][0]['overview_polyline']['points'] as String;
+        final decodedPoints = PolylinePoints.decodePolyline(encodedPolyline);
+
+        setState(() {
+          _driverActualRoadPoints = decodedPoints
+              .map((point) => LatLng(point.latitude, point.longitude))
+              .toList();
+          _currentDriverState = DriverRideState.passengerInTransit;
+        });
+
+        double calculateDistance(LatLng p1, LatLng p2) {
+          var p = 0.017453292519943295;
+          var a = 0.5 -
+              math.cos((p2.latitude - p1.latitude) * p) / 2 +
+              math.cos(p1.latitude * p) *
+                  math.cos(p2.latitude * p) *
+                  (1 - math.cos((p2.longitude - p1.longitude) * p)) /
+                  2;
+          return 12742 * math.asin(math.sqrt(a));
+        }
+
+        _driverSimulationTimer?.cancel();
+        _driverSimulationTimer = Timer.periodic(
+          const Duration(milliseconds: 400),
+          (timer) {
+            // Look inside your Timer.periodic hook in driver_dashboard_view.dart:
+            if (_driverWaypointIndex >= _driverActualRoadPoints.length) {
+              timer.cancel();
+              setState(() {
+                _isTripActive = false;
+                _isAwaitingPayment =
+                    true; // Core Fix: Lock app into payment authorization state
+                _paymentReceived = false;
+                _isProcessingPaymentPush = false;
+              });
+              return;
+            }
+
+            final currentPos = _driverActualRoadPoints[_driverWaypointIndex];
+
+            setState(() {
+              LatLng currentPos = _driverActualRoadPoints[_driverWaypointIndex];
+              if (_driverWaypointIndex > 0) {
+                double segment = calculateDistance(
+                    _driverActualRoadPoints[_driverWaypointIndex - 1],
+                    currentPos);
+                _driverTraveledDistanceKm += segment;
+              }
+
+              // Live total bill calculation
+              _passengerLiveFareKsh =
+                  100.0 + (_driverTraveledDistanceKm * 90.0);
+
+              // ✅ MATCHING MATH FLUSH: Driver gets exactly 80% of what the passenger pays
+              _driverLiveEarningsKsh = _passengerLiveFareKsh * 0.80;
+
+              _driverWaypointIndex++;
+            });
+
+            _mapController?.animateCamera(
+              CameraUpdate.newLatLng(
+                _driverActualRoadPoints[_driverWaypointIndex - 1],
+              ),
+            );
+          },
+        );
+      }
+    } catch (e) {
+      debugPrint('Driver local simulation routing error: $e');
+    }
+  }
+
+  Future<void> _finalizeTripToCloudDatabase() async {
+    setState(() {
+      _isTripActive = false;
+      _currentDriverState = DriverRideState.tripCompleted;
+    });
+
+    try {
+      final rideDocId = activeRideDocId;
+      if (rideDocId != null && rideDocId.isNotEmpty) {
+        await FirebaseFirestore.instance.collection('rides').doc(rideDocId).set(
+          {
+            'driverId': widget.user.uid,
+            'driverName': widget.user.displayName ?? 'AeroRide Partner',
+            'status': 'completed',
+            'distanceElapsedKm':
+                double.parse(_driverTraveledDistanceKm.toStringAsFixed(2)),
+            'finalFareCharged': _passengerLiveFareKsh.round(),
+            'driverEarningsLog': _driverLiveEarningsKsh.round(),
+            'completedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Trip successfully logged to Cloud History Ledger!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Failed logging history record: $e');
+    }
   }
 
   void _resetDriverDashboard() {
     setState(() {
       _currentDriverState = DriverRideState.searchingRequests;
       _activeRideData = null;
+      activeRideDocId = null;
       _mapPolylines.clear();
       _mapMarkers.clear();
     });
@@ -647,408 +1012,455 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
     );
   }
 
+  Widget _buildRealtimeRideMapLayer() {
+    if (activeRideDocId == null) {
+      return const Center(
+        child: Text('Waiting for incoming ride matching requests...'),
+      );
+    }
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('rides')
+          .doc(activeRideDocId)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || !(snapshot.data?.exists ?? false)) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final rideData = snapshot.data!.data()!;
+        final vehicleGeoPoint = rideData['currentVehicleLocation'] as GeoPoint?;
+
+        final currentCarLatLng = vehicleGeoPoint != null
+            ? LatLng(vehicleGeoPoint.latitude, vehicleGeoPoint.longitude)
+            : _driverCurrentLocation;
+
+        final Set<Marker> driverScreenMarkers = {
+          Marker(
+            markerId: const MarkerId('driver_self_marker'),
+            position: currentCarLatLng,
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+                BitmapDescriptor.hueYellow),
+            infoWindow: const InfoWindow(title: 'My Vehicle Location'),
+          ),
+        };
+
+        final pickupGeo =
+            (rideData['pickupGeo'] ?? rideData['pickup']) as GeoPoint?;
+        if (pickupGeo != null) {
+          driverScreenMarkers.add(
+            Marker(
+              markerId: const MarkerId('pickup_target'),
+              position: LatLng(pickupGeo.latitude, pickupGeo.longitude),
+              icon: BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueAzure),
+              infoWindow: const InfoWindow(title: 'Passenger Pickup'),
+            ),
+          );
+        }
+
+        final dropoffGeo =
+            (rideData['dropoffGeo'] ?? rideData['dropoff']) as GeoPoint?;
+        if (dropoffGeo != null) {
+          driverScreenMarkers.add(
+            Marker(
+              markerId: const MarkerId('dropoff_target'),
+              position: LatLng(dropoffGeo.latitude, dropoffGeo.longitude),
+              icon: BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueRed),
+              infoWindow: const InfoWindow(title: 'Destination'),
+            ),
+          );
+        }
+
+        return GoogleMap(
+          initialCameraPosition:
+              CameraPosition(target: currentCarLatLng, zoom: 14),
+          onMapCreated: (controller) => _mapController = controller,
+          markers: driverScreenMarkers,
+          myLocationButtonEnabled: false,
+          zoomControlsEnabled: true,
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.grey.shade100,
-      body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Fixed Top Duty Pill Status Banner
-            _buildTopStatusBanner(),
+    // 1. MARKER GENERATION GRID (Stays identical)
+    Set<Marker> driverScreenMarkers = {};
+    if (!_isTripActive && _driverWaypointIndex == 0 && _isOnline) {
+      driverScreenMarkers.add(
+        Marker(
+          markerId: const MarkerId("driver_initial_car"),
+          position: _mockDriverCurrentLocation,
+          icon:
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueYellow),
+          infoWindow: const InfoWindow(title: "My Vehicle (Online)"),
+        ),
+      );
+    } else if (_isTripActive &&
+        _activeRequest != null &&
+        _driverActualRoadPoints.isNotEmpty) {
+      if (_driverWaypointIndex < _driverActualRoadPoints.length) {
+        driverScreenMarkers.addAll([
+          Marker(
+            markerId: const MarkerId("moving_driver_car"),
+            position: _driverActualRoadPoints[_driverWaypointIndex],
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+                BitmapDescriptor.hueYellow),
+          ),
+          Marker(
+            markerId: const MarkerId("passenger_pickup_node"),
+            position: _activeRequest!.pickupCoords,
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+                BitmapDescriptor.hueAzure),
+          ),
+          Marker(
+            markerId: const MarkerId("passenger_dropoff_node"),
+            position: _activeRequest!.destinationCoords,
+            icon:
+                BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+          ),
+        ]);
+      }
+    }
 
-            // TOP 50% HALF: Framed Map Box
-            Expanded(
-              flex: 5,
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+    // 2. RENDERING THE CHOSEN TAB CONTROLLER
+    return Scaffold(
+      backgroundColor: Colors.white,
+
+      // THE CORE BODY CONTAINER
+      body: IndexedStack(
+        index: _selectedTabIndex,
+        children: [
+          // ==========================================
+          // TAB INDEX 0: THE WORKSPACE MAP DASHBOARD
+          // ==========================================
+          Column(
+            children: [
+              Expanded(
+                flex: 5,
                 child: Stack(
                   children: [
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(20),
-                        border:
-                            Border.all(color: Colors.grey.shade200, width: 1),
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      child: GoogleMap(
-                        initialCameraPosition: CameraPosition(
-                            target: _driverCurrentLocation, zoom: 12.0),
-                        onMapCreated: (controller) =>
-                            _mapController = controller,
-                        markers: _mapMarkers,
-                        polylines: _mapPolylines,
-                        myLocationButtonEnabled: false,
-                        zoomControlsEnabled: true,
-                      ),
+                    GoogleMap(
+                      initialCameraPosition: CameraPosition(
+                          target: _mockDriverCurrentLocation, zoom: 13.5),
+                      onMapCreated: (GoogleMapController controller) =>
+                          _mapController = controller,
+                      markers: driverScreenMarkers,
+                      polylines: _driverActualRoadPoints.isNotEmpty
+                          ? {
+                              Polyline(
+                                polylineId: const PolylineId(
+                                    "driver_local_road_polyline"),
+                                points: _driverActualRoadPoints,
+                                color: Colors.blueAccent,
+                                width: 5,
+                              )
+                            }
+                          : {},
                     ),
-                    Positioned(
-                      top: 12,
-                      right: 12,
-                      child: FloatingActionButton.small(
-                        heroTag: 'driver_profile_btn',
-                        backgroundColor: Colors.black,
-                        foregroundColor: Colors.white,
-                        elevation: 4,
-                        shape: const CircleBorder(),
-                        onPressed: _showProfileSheet,
-                        child: const Icon(Icons.badge, size: 20),
+                    if (_isTripActive ||
+                        (_driverWaypointIndex > 0 &&
+                            !_isSearchingForRides &&
+                            !_paymentReceived))
+                      Positioned(
+                        top: 40,
+                        left: 15,
+                        right: 15,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 12),
+                          decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.92),
+                              borderRadius: BorderRadius.circular(12)),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Text('DRIVE INCOME (80%)',
+                                      style: TextStyle(
+                                          color: Colors.white54,
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.bold)),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                      'KSh ${_driverLiveEarningsKsh.toStringAsFixed(0)}',
+                                      style: const TextStyle(
+                                          color: Colors.lightGreenAccent,
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.w900)),
+                                ],
+                              ),
+                              Container(
+                                  height: 24, width: 1, color: Colors.white24),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Text('TOTAL FARE',
+                                      style: TextStyle(
+                                          color: Colors.white54,
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.bold)),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                      'KSh ${_passengerLiveFareKsh.toStringAsFixed(0)}',
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.bold)),
+                                ],
+                              )
+                            ],
+                          ),
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
-            ),
-
-            // BOTTOM 50% HALF: Clean Workflow Action Board Panel
-            Expanded(
-              flex: 5,
-              child: Container(
-                margin: const EdgeInsets.only(top: 8),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                decoration: const BoxDecoration(
+              Expanded(
+                flex: 5,
+                child: Container(
                   color: Colors.white,
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-                  boxShadow: [
-                    BoxShadow(
-                        color: Colors.black12, blurRadius: 8, spreadRadius: 1)
-                  ],
-                ),
-                child: SingleChildScrollView(
-                  physics: const BouncingScrollPhysics(),
-                  child: !_isOnline
-                      ? _buildOfflinePanel()
-                      : _buildDriverWorkflowPanel(),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    child: _buildDriverWorkflowControls(),
+                  ),
                 ),
               ),
+            ],
+          ),
+
+          // ==========================================
+          // TAB INDEX 1: THE DEDICATED PROFILE ACCOUNT SHEET
+          // ==========================================
+          SafeArea(
+            child: SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text("My Profile",
+                      style: TextStyle(
+                          fontSize: 26,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.black)),
+                  const SizedBox(height: 20),
+
+                  // THE WORKSPACE TOGGLE SWITCH CARD
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color:
+                          _isOnline ? Colors.grey.shade100 : Colors.red.shade50,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                          color: _isOnline
+                              ? Colors.transparent
+                              : Colors.red.shade100),
+                    ),
+                    child: Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 24,
+                          backgroundColor: Colors.black87,
+                          child: Text(
+                            (widget.user.displayName ?? "A")
+                                .substring(0, 1)
+                                .toUpperCase(),
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16),
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                  widget.user.displayName ?? "AeroRide Partner",
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 15)),
+                              const SizedBox(height: 2),
+                              Text(
+                                  _isOnline
+                                      ? "Duty Status: Available"
+                                      : "Duty Status: Offline",
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color:
+                                          _isOnline ? Colors.green : Colors.red,
+                                      fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                        ),
+                        Switch.adaptive(
+                          value: _isOnline,
+                          activeColor: Colors.green,
+                          onChanged: (bool value) {
+                            setState(() {
+                              _isOnline = value;
+                              if (!_isOnline) {
+                                _isSearchingForRides = false;
+                                _availableRequests.clear();
+                                _driverSimulationTimer?.cancel();
+                              } else {
+                                _autoTriggerIncomingRideSearch();
+                              }
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 24),
+                  const Text("VEHICLE & METRICS",
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black45,
+                          letterSpacing: 1)),
+                  const SizedBox(height: 8),
+
+// 1. Vehicle info remains informational (no tap needed)
+                  _buildStaticAccountTile(Icons.local_taxi_rounded,
+                      "Vehicle Information", "Toyota Fielder - KCU 123X"),
+
+// 2. UPDATED: Detailed Financial Statements link -> goes to WalletView!
+                  _buildStaticAccountTile(
+                    Icons.analytics_rounded,
+                    "Detailed Financial Statements",
+                    "View history, processing fees, and earnings logs",
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const WalletView(),
+                        ),
+                      );
+                    },
+                  ),
+
+// 3. UPDATED: Help Desk channel link -> goes to SupportView!
+                  _buildStaticAccountTile(
+                    Icons.support_agent_rounded,
+                    "AeroRide Partner Help Desk",
+                    "Open active support channels or report an issue",
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) =>
+                              const SupportView(isDriver: true),
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 30),
+
+                  // SIGN OUT SYSTEM TRIGGER
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red.shade600,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size.fromHeight(46),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      elevation: 0,
+                    ),
+                    icon: const Icon(Icons.logout_rounded, size: 18),
+                    label: const Text("LOG OUT",
+                        style: TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.bold)),
+                    onPressed: () async {
+                      _driverSimulationTimer?.cancel();
+
+                      // ✅ Explicit page route instead of named route string
+                      Navigator.of(context).pushAndRemoveUntil(
+                        MaterialPageRoute(
+                            builder: (context) => const RoleSelectionScreen()),
+                        (route) =>
+                            false, // This wipes the history stack so they can't click "back" to get into the dashboard
+                      );
+                    },
+                  ),
+                ],
+              ),
             ),
-          ],
-        ),
+          ),
+        ],
+      ),
+
+      // FOOTER PERSISTENT TABS NAVIGATION MENU BAR
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _selectedTabIndex,
+        onTap: (index) {
+          setState(() {
+            _selectedTabIndex = index;
+          });
+        },
+        selectedItemColor: Colors.black,
+        unselectedItemColor: Colors.grey,
+        selectedLabelStyle:
+            const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+        unselectedLabelStyle: const TextStyle(fontSize: 11),
+        items: const [
+          BottomNavigationBarItem(
+              icon: Icon(Icons.map_rounded), label: "Map Dashboard"),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.person_rounded), label: "Profile / Account"),
+        ],
       ),
     );
   }
 
-  Widget _buildOfflinePanel() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const SizedBox(height: 16),
-        const Text(
-          'You are currently Offline',
-          style: TextStyle(
-              fontWeight: FontWeight.w900, fontSize: 20, letterSpacing: -0.5),
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 8),
-        const Text(
-          'Declare yourself online to share your live device GPS location in the frame above and begin accepting active trip assignments.',
-          style: TextStyle(fontSize: 13, color: Colors.grey, height: 1.4),
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 24),
-        ElevatedButton(
-          onPressed: _determineDriverGPSLocation,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.green.shade700,
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            elevation: 1,
-          ),
-          child: const Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.location_on, color: Colors.white),
-              SizedBox(width: 8),
-              Text('GO ONLINE / SHARE GPS LOCATION',
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14)),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildDriverWorkflowPanel() {
-    switch (_currentDriverState) {
-      case DriverRideState.searchingRequests:
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+// QUICK HELPER COMPONENT FOR ACCOUNT DETAILS ROWS
+  Widget _buildStaticAccountTile(IconData icon, String label, String value,
+      {VoidCallback? onTap}) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+        child: Row(
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'Live Request Board',
-                  style: TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: 19,
-                      letterSpacing: -0.5),
-                ),
-                TextButton.icon(
-                  onPressed: () => setState(() => _isOnline = false),
-                  icon: const Icon(Icons.power_settings_new,
-                      size: 16, color: Colors.red),
-                  label: const Text('GO OFFLINE',
-                      style: TextStyle(
-                          color: Colors.red,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12)),
-                )
-              ],
-            ),
-            const Text(
-              'Select an offer below to begin simulation sequence.',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-            const SizedBox(height: 8),
-            ListView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: _mockIncomingRidesPool.length,
-              itemBuilder: (context, index) {
-                final ride = _mockIncomingRidesPool[index];
-                return Card(
-                  margin: const EdgeInsets.symmetric(vertical: 6),
-                  elevation: 1,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      side: BorderSide(color: Colors.grey.shade200)),
-                  child: InkWell(
-                    onTap: () => _acceptRideRequest(ride),
-                    borderRadius: BorderRadius.circular(12),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12.0),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          const CircleAvatar(
-                            backgroundColor: Colors.black12,
-                            child: Icon(Icons.person, color: Colors.black87),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  ride['riderName'],
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 15),
-                                ),
-                                const SizedBox(height: 4),
-                                Text('🟢 From: ${ride['pickupName']}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(fontSize: 12)),
-                                Text('🔴 To: ${ride['destinationName']}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(fontSize: 12)),
-                                Text('📏 Distance: ${ride['distanceKm']} KM',
-                                    style: const TextStyle(
-                                        fontSize: 11, color: Colors.grey)),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                'KSh ${ride['fareKsh'].toStringAsFixed(0)}',
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w900,
-                                    fontSize: 16,
-                                    color: Colors.green),
-                              ),
-                              const SizedBox(height: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 6),
-                                decoration: BoxDecoration(
-                                    color: Colors.black,
-                                    borderRadius: BorderRadius.circular(6)),
-                                child: const Text('ACCEPT',
-                                    style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold)),
-                              )
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ],
-        );
-
-      case DriverRideState.navigatingToPickup:
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Navigating to Passenger...',
-                        style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 18,
-                            color: Colors.blue)),
-                    Text('Arriving at pickup point in $_etaMinutes Mins',
-                        style: const TextStyle(fontWeight: FontWeight.w500)),
-                  ],
-                ),
-                const Icon(Icons.directions_run, color: Colors.blue, size: 32),
-              ],
-            ),
-            const Divider(height: 24),
-            Text('PICKUP TARGET: ${_activeRideData?['pickupName']}',
-                style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.grey)),
-            const SizedBox(height: 12),
-            LinearProgressIndicator(
-                value: _transitProgress, color: Colors.blue, minHeight: 5),
-          ],
-        );
-
-      case DriverRideState.arrivedAtPickup:
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const SizedBox(height: 12),
-            const Text('Arrived at Pickup Spot! 👋',
-                style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 19,
-                    color: Colors.green)),
-            const SizedBox(height: 6),
-            Text(
-                'Passenger: ${_activeRideData?['riderName']} is getting into your vehicle.',
-                style: const TextStyle(fontSize: 13)),
-            const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: _startPassengerTransitTrip,
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.black,
-                  padding: const EdgeInsets.symmetric(vertical: 14)),
-              child: const Text('Start Passenger Trip Transit',
-                  style: TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.bold)),
-            ),
-          ],
-        );
-
-      case DriverRideState.passengerInTransit:
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text('Trip In Progress...',
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 17,
-                        color: Colors.orange)),
-                Text('Dest ETA: $_etaMinutes Mins',
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text('Dropping off at: ${_activeRideData?['destinationName']}',
-                style: const TextStyle(fontSize: 12, color: Colors.grey)),
-            const SizedBox(height: 14),
-            LinearProgressIndicator(
-                value: _transitProgress, color: Colors.orange, minHeight: 5),
-          ],
-        );
-
-      case DriverRideState.tripCompleted:
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const SizedBox(height: 12),
-            const Text('Trip Completed Successfully! 🏁',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 19)),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                  color: Colors.green.shade50,
-                  borderRadius: BorderRadius.circular(12)),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            Icon(icon, color: Colors.black54, size: 20),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Earnings Collected:',
-                      style: TextStyle(fontWeight: FontWeight.bold)),
-                  Text('KSh ${_activeRideData?['fareKsh'].toStringAsFixed(2)}',
+                  Text(label,
+                      style:
+                          const TextStyle(fontSize: 11, color: Colors.black45)),
+                  const SizedBox(height: 1),
+                  Text(value,
                       style: const TextStyle(
-                          fontWeight: FontWeight.w900,
-                          fontSize: 20,
-                          color: Colors.green)),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black87)),
                 ],
               ),
             ),
-            const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: _resetDriverDashboard,
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.black,
-                  padding: const EdgeInsets.symmetric(vertical: 14)),
-              child: const Text('Return to Request Board',
-                  style: TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.bold)),
-            ),
+            if (onTap != null)
+              const Icon(Icons.chevron_right_rounded,
+                  color: Colors.black38, size: 18),
           ],
-        );
-    }
-  }
-}
-
-class _AccountActionTile extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-
-  const _AccountActionTile({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: Icon(icon),
-      title: Text(title),
-      subtitle: Text(subtitle),
-      trailing: const Icon(Icons.chevron_right_rounded),
-      onTap: onTap,
+        ),
+      ),
     );
   }
 }

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
+import 'views/driver_dashboard_view.dart';
+import 'views/rider_dashboard_view.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -21,14 +23,22 @@ class _LoginScreenState extends State<LoginScreen> {
       _errorMsg = null;
     });
     try {
-      await _authService.login(_emailCtrl.text, _passwordCtrl.text);
-      if (mounted) {
-        Navigator.of(context).popUntil((route) => route.isFirst);
+      // 1. Authenticate with Firebase.
+      // The global StreamBuilder in main.dart will notice this immediately and take care of routing!
+      final user =
+          await _authService.login(_emailCtrl.text, _passwordCtrl.text);
+
+      if (user != null && mounted) {
+        // Just turn off the loading indicator. Do NOT call Navigator.push here!
+        setState(() => _isLoading = false);
       }
     } catch (e) {
-      setState(() => _errorMsg = e.toString());
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() {
+          _errorMsg = e.toString();
+          _isLoading = false;
+        });
+      }
     }
   }
 

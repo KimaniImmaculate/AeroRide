@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class RiderProfileScreen extends StatelessWidget {
   final User user;
@@ -30,8 +31,7 @@ class RiderProfileScreen extends StatelessWidget {
             _ProfileField(label: "Role", value: "Rider"),
             _ProfileField(
               label: "Account Created",
-              value:
-                  user.metadata.creationTime?.toString().split('.')[0] ??
+              value: user.metadata.creationTime?.toString().split('.')[0] ??
                   "Unknown",
             ),
             const SizedBox(height: 30),
@@ -40,17 +40,73 @@ class RiderProfileScreen extends StatelessWidget {
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                _StatBox(label: "Rides", value: "0"),
-                _StatBox(label: "Rating", value: "5.0"),
-                _StatBox(label: "Earned", value: "KES 0"),
-              ],
+            SizedBox(
+              height: 420,
+              child: _buildUserRideHistoryList(user.uid, 'rider'),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildUserRideHistoryList(String userId, String userRole) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('rides')
+          .where(userRole == 'rider' ? 'riderId' : 'driverId',
+              isEqualTo: userId)
+          .where('status', isEqualTo: 'completed')
+          .orderBy('completedAt', descending: true)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+          return const Center(
+            child: Text('No completed ride histories tracked in Nakuru fleet.'),
+          );
+        }
+
+        return ListView.builder(
+          itemCount: snapshot.data!.docs.length,
+          itemBuilder: (context, index) {
+            final data =
+                snapshot.data!.docs[index].data() as Map<String, dynamic>;
+            final dynamic fareValue =
+                data['finalFareCharged'] ?? data['liveFareCharged'] ?? 0;
+            final dynamic distanceValue =
+                data['distanceElapsedKm'] ?? data['totalDistanceKm'] ?? '0.0';
+
+            return Card(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              color: Colors.black87,
+              child: ListTile(
+                leading:
+                    const Icon(Icons.history_toggle_off, color: Colors.amber),
+                title: Text(
+                  'Trip to ${data['destinationName'] ?? 'Nakuru Destination'}',
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text(
+                  '$distanceValue KM Traveled',
+                  style: const TextStyle(color: Colors.white70),
+                ),
+                trailing: Text(
+                  'KSh $fareValue',
+                  style: const TextStyle(
+                      color: Colors.amberAccent,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold),
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }

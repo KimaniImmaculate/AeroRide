@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
+import 'views/rider_dashboard_view.dart';
+import 'views/driver_dashboard_view.dart';
 
 class SignUpScreen extends StatefulWidget {
   const SignUpScreen({super.key});
@@ -22,14 +24,38 @@ class _SignUpScreenState extends State<SignUpScreen> {
       _errorMsg = null;
     });
     try {
-      await _authService.signUp(
+      // 1️⃣ Dynamic Role Check: If their email contains 'driver', register them as one!
+      final String detectedRole =
+          _emailCtrl.text.trim().toLowerCase().contains('driver')
+              ? 'driver'
+              : 'passenger';
+
+      final user = await _authService.signUp(
         _nameCtrl.text,
         _emailCtrl.text,
         _passwordCtrl.text,
-        'passenger',
+        detectedRole, // ✅ Passed dynamically instead of hardcoded string
       );
-      if (mounted) {
-        Navigator.of(context).popUntil((route) => route.isFirst);
+
+      if (mounted && user != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+
+          // 2️⃣ Routing Switch: Send them to the correct dashboard workspace
+          if (detectedRole == 'driver') {
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute(
+                  builder: (context) => DriverDashboardView(user: user)),
+              (route) => false,
+            );
+          } else {
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute(
+                  builder: (context) => RiderDashboardView(user: user)),
+              (route) => false,
+            );
+          }
+        });
       }
     } catch (e) {
       setState(() => _errorMsg = e.toString());

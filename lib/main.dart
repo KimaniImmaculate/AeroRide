@@ -9,8 +9,10 @@ import 'package:provider/provider.dart';
 import 'package:aeroride/controllers/ride_controller.dart';
 import 'package:aeroride/firebase_options.dart';
 import 'package:aeroride/screens/role_selection_screen.dart';
-import 'package:aeroride/screens/views/driver_dashboard_view.dart';
-import 'package:aeroride/screens/views/rider_dashboard_view.dart';
+import 'package:aeroride/screens/views/driver_dashboard_view.dart'
+    as driver_views;
+import 'package:aeroride/screens/views/rider_dashboard_view.dart'
+    as rider_views;
 import 'package:aeroride/services/auth_service.dart';
 import 'package:aeroride/services/notification_service.dart';
 import 'package:aeroride/theme/aeroride_theme.dart';
@@ -81,6 +83,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
                 .timeout(const Duration(seconds: 10));
           }
 
+          // ✅ The FutureBuilder loads cleanly exactly ONCE here
           return FutureBuilder<DocumentSnapshot>(
             future: _profileFuture,
             builder: (context, userSnapshot) {
@@ -109,10 +112,15 @@ class _AuthWrapperState extends State<AuthWrapper> {
                     userSnapshot.data!.data() as Map<String, dynamic>;
                 final role = userData['role'] ?? 'rider';
 
+                // ✅ The stable wrappers catch and initialize both maps beautifully
                 if (role == 'driver') {
-                  return DriverDashboardView(user: user);
+                  return _StableDashboardMapWrapper(
+                    child: driver_views.DriverDashboardView(user: user),
+                  );
                 } else {
-                  return RiderDashboardView(user: user);
+                  return _StableDashboardMapWrapper(
+                    child: rider_views.RiderDashboardView(user: user),
+                  );
                 }
               }
 
@@ -121,8 +129,57 @@ class _AuthWrapperState extends State<AuthWrapper> {
           );
         }
 
+        // Fallback if no user data is active in Firebase Auth streams
         return const RoleSelectionScreen();
       },
+    );
+  }
+}
+
+// ✅ UPGRADED: Added a runtime state key tracker to eliminate multi-swap Web DOM caching crashes
+class _StableDashboardMapWrapper extends StatefulWidget {
+  final Widget child;
+  const _StableDashboardMapWrapper({required this.child});
+
+  @override
+  State<_StableDashboardMapWrapper> createState() =>
+      _StableDashboardMapWrapperState();
+}
+
+class _StableDashboardMapWrapperState
+    extends State<_StableDashboardMapWrapper> {
+  bool _isRenderReady = false;
+  // 🔑 Unique state key forces Chrome to cleanly separate instances during portal flips
+  final Key _domKey = UniqueKey();
+
+  @override
+  void initState() {
+    super.initState();
+    // ⏳ 450ms gives the Web engine absolute breathing room to dispose of the old layout
+    Future.delayed(const Duration(milliseconds: 450), () {
+      if (mounted) {
+        setState(() => _isRenderReady = true);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_isRenderReady) {
+      return const Scaffold(
+        backgroundColor: Colors.white,
+        body: Center(
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
+          ),
+        ),
+      );
+    }
+
+    // ✅ Wrapping your child view inside a Keyed Container prevents layout reuse collisions
+    return Container(
+      key: _domKey,
+      child: widget.child,
     );
   }
 }
