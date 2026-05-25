@@ -527,6 +527,161 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
     );
   }
 
+  Future<void> _showRiderQuickAccountSheet(BuildContext ctx) async {
+    await showModalBottomSheet<void>(
+      context: ctx,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 26,
+                    backgroundColor: Colors.grey.shade100,
+                    child: Text(
+                      widget.user.displayName?.substring(0, 1).toUpperCase() ??
+                          'R',
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.user.displayName ?? 'AeroRide Rider',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          widget.user.email ?? 'passenger@aeroride.com',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(
+                      Icons.arrow_forward_ios,
+                      size: 16,
+                      color: Colors.grey,
+                    ),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _showProfileSheet();
+                    },
+                  ),
+                ],
+              ),
+              const Divider(height: 32),
+              _buildSheetActionRow(
+                Icons.account_balance_wallet_outlined,
+                'Wallet & Payments',
+                'KSh 1,200 personal cash',
+                () {
+                  Navigator.pop(context);
+                  _showToastError('Wallet screen is not connected yet.');
+                },
+              ),
+              _buildSheetActionRow(
+                Icons.history,
+                'My Ride Logs & History',
+                'Review past trips',
+                () {
+                  Navigator.pop(context);
+                  _showProfileSheet();
+                },
+              ),
+              _buildSheetActionRow(
+                Icons.help_outline,
+                'Support & Safety Dispatch',
+                '24/7 client care lines',
+                () {
+                  Navigator.pop(context);
+                  _showToastError('Support is not connected yet.');
+                },
+              ),
+              const Divider(height: 24),
+              TextButton.icon(
+                onPressed: () async {
+                  await FirebaseAuth.instance.signOut();
+                  if (!ctx.mounted) return;
+                  Navigator.popUntil(ctx, (route) => route.isFirst);
+                },
+                icon:
+                    const Icon(Icons.logout, color: Colors.redAccent, size: 18),
+                label: const Text(
+                  'Sign Out of AeroRide',
+                  style: TextStyle(
+                    color: Colors.redAccent,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                style: TextButton.styleFrom(
+                  alignment: Alignment.centerLeft,
+                  padding: EdgeInsets.zero,
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSheetActionRow(
+    IconData icon,
+    String title,
+    String subtitle,
+    VoidCallback onTap,
+  ) {
+    return ListTile(
+      onTap: onTap,
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(icon, color: Colors.black87, size: 22),
+      title: Text(
+        title,
+        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+      ),
+      subtitle: Text(
+        subtitle,
+        style: const TextStyle(fontSize: 12, color: Colors.grey),
+      ),
+      trailing:
+          const Icon(Icons.arrow_forward_ios, size: 12, color: Colors.black26),
+    );
+  }
+
   Set<Marker> _buildMapMarkers() {
     Set<Marker> markers = {};
 
@@ -578,9 +733,10 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
               flex: 5,
               child: Padding(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                 child: Stack(
                   children: [
+                    // Map Container Layer
                     Container(
                       decoration: BoxDecoration(
                         color: Colors.white,
@@ -601,17 +757,42 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                         zoomControlsEnabled: true,
                       ),
                     ),
+
+                    // Premium Hybrid Floating Avatar Button
                     Positioned(
-                      top: 12,
-                      right: 12,
-                      child: FloatingActionButton.small(
-                        heroTag: 'rider_profile_btn',
-                        backgroundColor: Colors.white,
-                        foregroundColor: Colors.black,
-                        elevation: 4,
-                        shape: const CircleBorder(),
-                        onPressed: _showProfileSheet,
-                        child: const Icon(Icons.person, size: 22),
+                      top: 14,
+                      right: 14,
+                      child: GestureDetector(
+                        onTap: () => _showRiderQuickAccountSheet(context),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                            boxShadow: const [
+                              BoxShadow(
+                                  color: Colors.black26,
+                                  blurRadius: 6,
+                                  offset: Offset(0, 2)),
+                            ],
+                            border: Border.all(color: Colors.black12, width: 2),
+                          ),
+                          child: CircleAvatar(
+                            radius: 22,
+                            backgroundColor: Colors.black,
+                            child: Text(
+                              widget.user.displayName != null &&
+                                      widget.user.displayName!.isNotEmpty
+                                  ? widget.user.displayName!
+                                      .substring(0, 1)
+                                      .toUpperCase()
+                                  : 'R',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16),
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ],

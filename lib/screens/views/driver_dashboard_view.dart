@@ -263,6 +263,179 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
     );
   }
 
+  void _showDriverQuickAccountSheet(BuildContext ctx) {
+    showModalBottomSheet(
+      context: ctx,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 26,
+                    backgroundColor: Colors.black12,
+                    child: Text(
+                      (widget.user.displayName?.isNotEmpty ?? false)
+                          ? widget.user.displayName![0].toUpperCase()
+                          : 'D',
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.user.displayName ?? 'AeroRide Partner',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const Text(
+                          '★ 4.95 Rating • Gold Driver',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.amber,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(
+                      Icons.arrow_forward_ios,
+                      size: 16,
+                      color: Colors.grey,
+                    ),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) =>
+                              DriverProfileScreen(user: widget.user),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+              const Divider(height: 32),
+              _buildSheetActionRow(
+                Icons.monetization_on_outlined,
+                'Earnings & Cashouts',
+                "Today's Ledger Balance: KSh 3,450",
+                () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) =>
+                          DriverProfileScreen(user: widget.user),
+                    ),
+                  );
+                },
+              ),
+              _buildSheetActionRow(
+                Icons.local_taxi,
+                'Vehicle & Fleet Verification',
+                'Toyota Fielder (KDG 512A)',
+                () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) =>
+                          DriverProfileScreen(user: widget.user),
+                    ),
+                  );
+                },
+              ),
+              _buildSheetActionRow(
+                Icons.support_agent,
+                'Driver Operator Support',
+                'Direct support dispatch hub',
+                () {},
+              ),
+              const Divider(height: 24),
+              TextButton.icon(
+                onPressed: () async {
+                  await FirebaseAuth.instance.signOut();
+                  if (context.mounted) {
+                    Navigator.popUntil(context, (route) => route.isFirst);
+                  }
+                },
+                icon: const Icon(Icons.power_settings_new,
+                    color: Colors.redAccent, size: 18),
+                label: const Text(
+                  'Go Offline & Sign Out',
+                  style: TextStyle(
+                    color: Colors.redAccent,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                style: TextButton.styleFrom(
+                  alignment: Alignment.centerLeft,
+                  padding: EdgeInsets.zero,
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSheetActionRow(
+    IconData icon,
+    String title,
+    String subtitle,
+    VoidCallback onTap,
+  ) {
+    return ListTile(
+      onTap: onTap,
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(icon, color: Colors.black87, size: 22),
+      title: Text(
+        title,
+        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+      ),
+      subtitle: Text(
+        subtitle,
+        style: const TextStyle(fontSize: 12, color: Colors.grey),
+      ),
+      trailing:
+          const Icon(Icons.arrow_forward_ios, size: 12, color: Colors.black26),
+    );
+  }
+
   Widget _buildTopStatusBanner() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
@@ -308,7 +481,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
               IconButton(
                 icon: const Icon(Icons.badge, color: Colors.white, size: 24),
                 tooltip: 'Driver Account Desk',
-                onPressed: _showProfileSheet,
+                onPressed: () => _showDriverQuickAccountSheet(context),
               ),
             ],
           ),
