@@ -56,7 +56,12 @@ class DriverProfileScreen extends StatelessWidget {
 
                 for (final doc in snapshot.data!.docs) {
                   final data = doc.data() as Map<String, dynamic>;
-                  totalEarnings += (data['fareAmountKsh'] ?? 0.0).toDouble();
+                  // Prefer driverEarningsLog if present, fallback to legacy fareAmountKsh
+                  final earning = (data['driverEarningsLog'] ??
+                          data['fareAmountKsh'] ??
+                          0.0)
+                      .toDouble();
+                  totalEarnings += earning;
                 }
 
                 return Row(
@@ -112,14 +117,18 @@ class DriverProfileScreen extends StatelessWidget {
                             data['dropoffAddress'] ??
                             'Trip')
                         .toString();
-                    final fare = (data['fareAmountKsh'] ?? 0.0).toDouble();
+
+                    final double finalFare = (data['finalFareCharged'] ??
+                            data['fareAmountKsh'] ??
+                            0.0)
+                        .toDouble();
 
                     return Card(
                       child: ListTile(
                         leading: const Icon(Icons.route, color: Colors.green),
                         title: Text(rideLabel),
                         subtitle: Text(
-                            'Completed ride • KSh ${fare.toStringAsFixed(0)}'),
+                            'Completed ride • KSh ${finalFare.toStringAsFixed(0)}'),
                       ),
                     );
                   }).toList(),

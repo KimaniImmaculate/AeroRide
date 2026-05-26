@@ -12,6 +12,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
+import '../../utils/fare_calculator.dart';
 
 import '../../controllers/ride_controller.dart';
 import '../../models/ride_request_model.dart';
@@ -20,8 +21,10 @@ import '../../models/user_model.dart';
 import '../../services/firestore_service.dart';
 import '../../theme/aeroride_theme.dart';
 import '../../utils/currency.dart';
+import '../../utils/browser_geolocation.dart';
 import '../../widgets/aeroride_components.dart';
 import 'support_view.dart';
+import 'directions_route_provider.dart';
 import 'wallet_view.dart';
 import '../role_selection_screen.dart';
 
@@ -53,6 +56,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
   late RideController _rideController;
   GoogleMapController? _mapController;
+  VoidCallback? _rideControllerListener;
 
   // Real-time Core Lifecycle States
   RideState _currentRideState = RideState.idle;
@@ -94,7 +98,16 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
   void initState() {
     super.initState();
     _rideController = Provider.of<RideController>(context, listen: false);
-    unawaited(_rideController.startRiderLocationTracking());
+    _rideControllerListener = () {
+      if (mounted) {
+        setState(() {});
+      }
+    };
+    _rideController.addListener(_rideControllerListener!);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_rideController.startRiderLocationTracking());
+    });
     _rideController.loadRideTypes();
 
     _rideController.onDriverArrived = (driverName, vehicleInfo) {
@@ -118,10 +131,126 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
   void dispose() {
     _simulationTimer?.cancel();
     _inTransitTimer?.cancel();
+    if (_rideControllerListener != null) {
+      _rideController.removeListener(_rideControllerListener!);
+    }
     _mapController?.dispose();
     _pickupTextController.dispose();
     _destinationTextController.dispose();
     super.dispose();
+  }
+
+  void _ensureMockDriversPool(LatLng aroundPoint) {
+    if (_availableDriversPool.isNotEmpty) return;
+
+    _availableDriversPool = [
+      {
+        "name": "James Kamau",
+        "vehicle": "KDD 555Y - Silver Nissan Leaf",
+        "rating": "4.9",
+        "eta": 3,
+        "lat": aroundPoint.latitude + 0.003,
+        "lng": aroundPoint.longitude + 0.003
+      },
+      {
+        "name": "Sarah Mwangi",
+        "vehicle": "KCA 123Z - White Toyota Prius",
+        "rating": "4.8",
+        "eta": 5,
+        "lat": aroundPoint.latitude - 0.002,
+        "lng": aroundPoint.longitude + 0.002
+      }
+    ];
+  }
+
+  Widget _buildLiveTaximeterDock() {
+    if (_currentRideState != RideState.driverEnRoute &&
+        _currentRideState != RideState.inTransit) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black26,
+            blurRadius: 10,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'LIVE TAXIMETER FARE',
+                style: TextStyle(
+                  color: Colors.white54,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'KSh ${_liveRunningFareKsh.toStringAsFixed(0)}',
+                style: const TextStyle(
+                  color: Colors.amber,
+                  fontSize: 26,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+          Container(
+            height: 35,
+            width: 1,
+            color: Colors.white24,
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'ETA / DISTANCE',
+                style: TextStyle(
+                  color: Colors.white54,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'ETA: ${_etaMinutes < 0 ? 0 : _etaMinutes} Mins',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                '${_liveTraveledDistanceKm.toStringAsFixed(2)} KM',
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   void _clearExistingRoute() {
@@ -158,9 +287,29 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
   // Uses device hardware to snap current coordinates automatically
   Future<void> _useCurrentLocation() async {
     setState(() => _isSearchingGeocode = true);
+
+    if (kIsWeb) {
+      final browserCoords = await requestBrowserLocation();
+      if (browserCoords != null) {
+        _rideController.riderLocation = browserCoords;
+      }
+    }
+
+    final fallbackCoords =
+        _rideController.riderLocation ?? const LatLng(-0.2831, 36.0664);
+
+    // Immediately pin a usable pickup point so the button always feels responsive.
+    setState(() {
+      _riderLocation = fallbackCoords;
+      _pickupAddressString =
+          "My Current Location (${fallbackCoords.latitude.toStringAsFixed(4)}, ${fallbackCoords.longitude.toStringAsFixed(4)})";
+      _pickupTextController.text = _pickupAddressString;
+    });
+    _mapController
+        ?.animateCamera(CameraUpdate.newLatLngZoom(fallbackCoords, 16.0));
+
     try {
-      LatLng currentCoords =
-          _rideController.riderLocation ?? const LatLng(-0.2831, 36.0664);
+      LatLng currentCoords = _rideController.riderLocation ?? fallbackCoords;
 
       List<geo.Placemark> placemarks = await geo
           .placemarkFromCoordinates(
@@ -188,8 +337,6 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
             ?.animateCamera(CameraUpdate.newLatLngZoom(currentCoords, 16.0));
       }
     } catch (e) {
-      final fallbackCoords =
-          _rideController.riderLocation ?? const LatLng(-0.2831, 36.0664);
       setState(() {
         _riderLocation = fallbackCoords;
         _pickupAddressString = "Current Location (Pinned)";
@@ -303,8 +450,8 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       // 3. Mathematical distance calculation (Haversine Formula)
       double distanceInKm =
           _calculateHaversineDistance(_riderLocation!, _destinationLocation!);
-      _calculatedFareKsh = (distanceInKm * 70.0) + 150.0;
-      if (_calculatedFareKsh < 200) _calculatedFareKsh = 200.00;
+      final fare = computeFareAndEarnings(distanceInKm, 0.0);
+      _calculatedFareKsh = fare.passengerFare;
 
       // 4. Generate custom nearby vehicle pool
       _availableDriversPool = [
@@ -358,54 +505,101 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
   Future<void> _calculateRouteAndPricing(
       LatLng origin, LatLng destination) async {
-    final url =
-        'https://maps.googleapis.com/maps/api/directions/json?origin=${origin.latitude},${origin.longitude}&destination=${destination.latitude},${destination.longitude}&key=$googleMapsApiKey';
-
     try {
-      final response = await http.get(Uri.parse(url));
+      const url = 'https://routes.googleapis.com/directions/v2:computeRoutes';
+
+      final response = await http.post(
+        Uri.parse(url),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': googleMapsApiKey,
+          'X-Goog-FieldMask':
+              'routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline',
+        },
+        body: jsonEncode({
+          'origin': {
+            'location': {
+              'latLng': {
+                'latitude': origin.latitude,
+                'longitude': origin.longitude,
+              }
+            }
+          },
+          'destination': {
+            'location': {
+              'latLng': {
+                'latitude': destination.latitude,
+                'longitude': destination.longitude,
+              }
+            }
+          },
+          'travelMode': 'DRIVE',
+          'routingPreference': 'TRAFFIC_AWARE',
+        }),
+      );
+
       final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final routes = data['routes'] as List<dynamic>?;
 
-      if (data['status'] == 'OK') {
-        final route = data['routes'][0] as Map<String, dynamic>;
-        final leg = route['legs'][0] as Map<String, dynamic>;
-        final distanceMeters = leg['distance']['value'] as int;
-        final durationSeconds = leg['duration']['value'] as int;
-
-        final distanceKm = distanceMeters / 1000.0;
-        final durationMins = durationSeconds / 60.0;
-
-        const baseFare = 100.0;
-        const costPerKm = 45.0;
-        const costPerMin = 3.0;
-        final totalFare =
-            baseFare + (distanceKm * costPerKm) + (durationMins * costPerMin);
-
-        final encodedPolyline = route['overview_polyline']['points'] as String;
-        final decodedPoints = PolylinePoints.decodePolyline(encodedPolyline);
-        final roadRoute = decodedPoints
-            .map((point) => LatLng(point.latitude, point.longitude))
-            .toList();
-
-        if (!mounted) return;
-
-        setState(() {
-          _actualRoadPoints = roadRoute;
-          _calculatedFareKsh = totalFare.clamp(200.0, 5000.0);
-          _mapPolylines.clear();
-          _mapPolylines.add(
-            Polyline(
-              polylineId: const PolylineId('road_route'),
-              points: roadRoute,
-              color: Colors.black,
-              width: 5,
-              consumeTapEvents: false,
-            ),
-          );
-          _currentRideState = RideState.driverSelection;
-        });
-
-        _zoomToFitRoute(origin, destination);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        debugPrint(
+            'Routes API Error: HTTP ${response.statusCode} - ${response.body}');
+        return;
       }
+
+      if (routes == null || routes.isEmpty) {
+        debugPrint('Routes API Error: No routes returned - ${response.body}');
+        return;
+      }
+
+      final route = routes[0] as Map<String, dynamic>;
+      final distanceMeters = route['distanceMeters'] as num? ?? 0;
+      final distanceKm = distanceMeters / 1000.0;
+
+      final driverAnchor = _riderLocation ?? origin;
+      _ensureMockDriversPool(driverAnchor);
+
+      final durationString = route['duration'] as String? ?? '0s';
+      final durationSeconds =
+          num.tryParse(durationString.replaceAll('s', '')) ?? 0;
+      final durationMins = durationSeconds / 60.0;
+
+      final fare = computeFareAndEarnings(distanceKm, durationMins);
+
+      final polylineData = route['polyline'] as Map<String, dynamic>?;
+      final encodedPolyline = polylineData?['encodedPolyline']?.toString();
+
+      if (encodedPolyline == null || encodedPolyline.isEmpty) {
+        debugPrint(
+            'Routing aborted: Google API did not return polyline points.');
+        return;
+      }
+
+      final decodedPoints = PolylinePoints.decodePolyline(encodedPolyline);
+      final roadRoute = decodedPoints
+          .map((point) => LatLng(point.latitude, point.longitude))
+          .toList();
+
+      if (!mounted) return;
+
+      setState(() {
+        _actualRoadPoints = roadRoute;
+        _calculatedFareKsh =
+            (fare.passengerFare).clamp(200.0, 5000.0) as double;
+        _mapPolylines.clear();
+        _mapPolylines.add(
+          Polyline(
+            polylineId: const PolylineId('road_route'),
+            points: roadRoute,
+            color: Colors.black,
+            width: 5,
+            consumeTapEvents: false,
+          ),
+        );
+        _currentRideState = RideState.driverSelection;
+      });
+
+      _zoomToFitRoute(origin, destination);
     } catch (e) {
       debugPrint('Routing engine failed: $e');
     }
@@ -457,6 +651,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                     final dest = LatLng(geo.latitude, geo.longitude);
 
                     setState(() {
+                      _ensureMockDriversPool(origin);
                       _destinationLocation = dest;
                       _destinationAddressString = destinationName;
                       _destinationTextController.text = destinationName;
@@ -556,7 +751,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       'createdAt': FieldValue.serverTimestamp(),
     });
 
-    Timer(const Duration(seconds: 2), () {
+    Timer(const Duration(seconds: 2), () async {
       if (!mounted) return;
       rideRequestRef
           .update({'status': 'accepted', 'driverName': driver['name']});
@@ -565,72 +760,97 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
         _currentRideState = RideState.driverEnRoute;
       });
 
-      unawaited(_fetchRoadRouteForPhase(
-        startPoint: _driverLocation!,
-        endPoint: _riderLocation!,
-        phase: TravelPhase.driverToRider,
-      ));
+      await _fetchRoadRouteForPhase(_driverLocation!, _riderLocation!);
+      _startProgressiveInTransitSimulation(TravelPhase.driverToRider);
     });
   }
 
-  void _startTripTransit() {
+  Future<void> _startTripTransit() async {
     if (!mounted || _riderLocation == null || _destinationLocation == null) {
       return;
     }
 
-    unawaited(_fetchRoadRouteForPhase(
-      startPoint: _riderLocation!,
-      endPoint: _destinationLocation!,
-      phase: TravelPhase.riderToDestination,
-    ));
+    await _fetchRoadRouteForPhase(_riderLocation!, _destinationLocation!);
+    _startProgressiveInTransitSimulation(TravelPhase.riderToDestination);
   }
 
-  Future<void> _fetchRoadRouteForPhase({
-    required LatLng startPoint,
-    required LatLng endPoint,
-    required TravelPhase phase,
-  }) async {
-    final url =
-        'https://maps.googleapis.com/maps/api/directions/json?origin=${startPoint.latitude},${startPoint.longitude}&destination=${endPoint.latitude},${endPoint.longitude}&key=$googleMapsApiKey';
+  Future<void> _fetchRoadRouteForPhase(
+      LatLng origin, LatLng destination) async {
+    const url = 'https://routes.googleapis.com/directions/v2:computeRoutes';
 
     try {
-      final response = await http.get(Uri.parse(url));
+      final response = await http.post(
+        Uri.parse(url),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': googleMapsApiKey,
+          'X-Goog-FieldMask': 'routes.polyline.encodedPolyline',
+        },
+        body: jsonEncode({
+          'origin': {
+            'location': {
+              'latLng': {
+                'latitude': origin.latitude,
+                'longitude': origin.longitude,
+              }
+            }
+          },
+          'destination': {
+            'location': {
+              'latLng': {
+                'latitude': destination.latitude,
+                'longitude': destination.longitude,
+              }
+            }
+          },
+          'travelMode': 'DRIVE',
+          'routingPreference': 'TRAFFIC_AWARE',
+        }),
+      );
+
       final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final routes = data['routes'] as List<dynamic>?;
 
-      if (data['status'] == 'OK') {
-        final route = data['routes'][0] as Map<String, dynamic>;
-        final encodedPolyline = route['overview_polyline']['points'] as String;
-        final decodedPoints = PolylinePoints.decodePolyline(encodedPolyline);
-        final computedRoadCoordinates = decodedPoints
-            .map((point) => LatLng(point.latitude, point.longitude))
-            .toList();
-
-        if (!mounted) return;
-
-        setState(() {
-          _actualRoadPoints = computedRoadCoordinates;
-          _currentWaypointIndex = 0;
-
-          _mapPolylines.clear();
-          _mapPolylines.add(
-            Polyline(
-              polylineId: PolylineId(
-                phase == TravelPhase.driverToRider
-                    ? 'dispatch_route'
-                    : 'trip_route',
-              ),
-              points: computedRoadCoordinates,
-              color: phase == TravelPhase.driverToRider
-                  ? Colors.blueAccent
-                  : Colors.black,
-              width: 6,
-            ),
-          );
-        });
-
-        _zoomToFitRoute(startPoint, endPoint);
-        _startProgressiveInTransitSimulation(phase);
+      if (routes == null || routes.isEmpty) {
+        debugPrint(
+            'Phase routing aborted: No routes returned. Response: ${response.body}');
+        return;
       }
+
+      final route = routes[0] as Map<String, dynamic>;
+
+      final polylineData = route['polyline'] as Map<String, dynamic>?;
+      final encodedPolyline = polylineData?['encodedPolyline']?.toString();
+
+      if (encodedPolyline == null || encodedPolyline.isEmpty) {
+        debugPrint('Phase routing aborted: No polyline points available.');
+        return;
+      }
+
+      final decodedPoints = PolylinePoints.decodePolyline(encodedPolyline);
+      final roadRoute = decodedPoints
+          .map((point) => LatLng(point.latitude, point.longitude))
+          .toList();
+
+      if (!mounted) return;
+
+      setState(() {
+        _actualRoadPoints = roadRoute;
+        _currentWaypointIndex = 0;
+
+        _mapPolylines.clear();
+        _mapPolylines.add(
+          Polyline(
+            polylineId: const PolylineId('phase_route'),
+            points: roadRoute,
+            color: Colors.blue,
+            width: 5,
+            consumeTapEvents: false,
+          ),
+        );
+      });
+
+      _zoomToFitRoute(origin, destination);
     } catch (e) {
       debugPrint('Phase routing failed: $e');
     }
@@ -642,11 +862,19 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
     _simulationTimer?.cancel();
     _inTransitTimer?.cancel();
     _currentWaypointIndex = 0;
+    final startingEtaMinutes = _etaMinutes <= 0
+        ? (phase == TravelPhase.riderToDestination ? 8 : 5)
+        : _etaMinutes;
 
     if (phase == TravelPhase.riderToDestination) {
       _liveTraveledDistanceKm = 0.0;
       _liveRunningFareKsh = 100.0;
       _liveDriverEarningsKsh = 0.0;
+      if (_etaMinutes <= 0) {
+        _etaMinutes = 8;
+      }
+    } else if (_etaMinutes <= 0) {
+      _etaMinutes = 5;
     }
 
     double calculateSegmentDistance(LatLng p1, LatLng p2) {
@@ -664,6 +892,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       _currentRideState = phase == TravelPhase.driverToRider
           ? RideState.driverEnRoute
           : RideState.inTransit;
+      _movingProgress = 0.0;
       _driverLocation = _actualRoadPoints.first;
       _mapMarkers.removeWhere(
           (marker) => marker.markerId.value == 'simulated_car_marker');
@@ -710,6 +939,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
               }),
             );
           }
+          _etaMinutes = 0;
         } else {
           final rideDocumentId = _currentRideDocumentId;
           if (rideDocumentId != null && rideDocumentId.isNotEmpty) {
@@ -781,6 +1011,14 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
           _liveRunningFareKsh = 100.0 + (_liveTraveledDistanceKm * 90.0);
           _liveDriverEarningsKsh = _liveTraveledDistanceKm * 75.0;
         }
+
+        final totalSteps = _actualRoadPoints.length;
+        _movingProgress = totalSteps <= 1
+            ? 1.0
+            : (_currentWaypointIndex / (totalSteps - 1)).clamp(0.0, 1.0);
+        _etaMinutes = ((1.0 - _movingProgress) * startingEtaMinutes)
+            .ceil()
+            .clamp(0, startingEtaMinutes);
 
         _driverLocation = currentVehiclePosition;
 
@@ -952,133 +1190,139 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) {
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade300,
-                    borderRadius: BorderRadius.circular(10),
+        return SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  CircleAvatar(
-                    radius: 26,
-                    backgroundColor: Colors.grey.shade100,
-                    child: Text(
-                      widget.user.displayName?.substring(0, 1).toUpperCase() ??
-                          'R',
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black,
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 26,
+                      backgroundColor: Colors.grey.shade100,
+                      child: Text(
+                        widget.user.displayName
+                                ?.substring(0, 1)
+                                .toUpperCase() ??
+                            'R',
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black,
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          widget.user.displayName ?? 'AeroRide Rider',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.user.displayName ?? 'AeroRide Rider',
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
-                        ),
-                        Text(
-                          widget.user.email ?? 'passenger@aeroride.com',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey,
+                          Text(
+                            widget.user.email ?? 'passenger@aeroride.com',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey,
+                            ),
                           ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.arrow_forward_ios,
+                        size: 16,
+                        color: Colors.grey,
+                      ),
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _showProfileSheet();
+                      },
+                    ),
+                  ],
+                ),
+                const Divider(height: 32),
+                _buildSheetActionRow(
+                  Icons.account_balance_wallet_outlined,
+                  'Wallet & Payments',
+                  'KSh 1,200 personal cash',
+                  () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const WalletView(
+                          currentBalance: 1200.0,
                         ),
-                      ],
+                      ),
+                    );
+                  },
+                ),
+                _buildSheetActionRow(
+                  Icons.history,
+                  'My Ride Logs & History',
+                  'Review past trips',
+                  () {
+                    Navigator.pop(context);
+                    _showProfileSheet();
+                  },
+                ),
+                _buildSheetActionRow(
+                  Icons.help_outline,
+                  'Support & Safety Dispatch',
+                  '24/7 client care lines',
+                  () {
+                    Navigator.pop(context);
+                    Navigator.of(this.context).push(
+                      MaterialPageRoute(
+                        builder: (context) => const SupportView(),
+                      ),
+                    );
+                  },
+                ),
+                const Divider(height: 24),
+                TextButton.icon(
+                  onPressed: () async {
+                    // Cleanly sign out from Firebase.
+                    // Your global main.dart AuthWrapper will catch this and safely take the user back.
+                    await FirebaseAuth.instance.signOut();
+                  },
+                  icon: const Icon(Icons.logout,
+                      color: Colors.redAccent, size: 18),
+                  label: const Text(
+                    'Sign Out of AeroRide',
+                    style: TextStyle(
+                      color: Colors.redAccent,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                  IconButton(
-                    icon: const Icon(
-                      Icons.arrow_forward_ios,
-                      size: 16,
-                      color: Colors.grey,
-                    ),
-                    onPressed: () {
-                      Navigator.pop(context);
-                      _showProfileSheet();
-                    },
-                  ),
-                ],
-              ),
-              const Divider(height: 32),
-              _buildSheetActionRow(
-                Icons.account_balance_wallet_outlined,
-                'Wallet & Payments',
-                'KSh 1,200 personal cash',
-                () {
-                  Navigator.pop(context);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const WalletView(),
-                    ),
-                  );
-                },
-              ),
-              _buildSheetActionRow(
-                Icons.history,
-                'My Ride Logs & History',
-                'Review past trips',
-                () {
-                  Navigator.pop(context);
-                  _showProfileSheet();
-                },
-              ),
-              _buildSheetActionRow(
-                Icons.help_outline,
-                'Support & Safety Dispatch',
-                '24/7 client care lines',
-                () {
-                  Navigator.pop(context);
-                  Navigator.of(this.context).push(
-                    MaterialPageRoute(
-                      builder: (context) => const SupportView(),
-                    ),
-                  );
-                },
-              ),
-              const Divider(height: 24),
-              TextButton.icon(
-                onPressed: () async {
-                  // Cleanly sign out from Firebase.
-                  // Your global main.dart AuthWrapper will catch this and safely take the user back.
-                  await FirebaseAuth.instance.signOut();
-                },
-                icon:
-                    const Icon(Icons.logout, color: Colors.redAccent, size: 18),
-                label: const Text(
-                  'Sign Out of AeroRide',
-                  style: TextStyle(
-                    color: Colors.redAccent,
-                    fontWeight: FontWeight.bold,
+                  style: TextButton.styleFrom(
+                    alignment: Alignment.centerLeft,
+                    padding: EdgeInsets.zero,
                   ),
                 ),
-                style: TextButton.styleFrom(
-                  alignment: Alignment.centerLeft,
-                  padding: EdgeInsets.zero,
-                ),
-              ),
-              const SizedBox(height: 10),
-            ],
+                const SizedBox(height: 10),
+              ],
+            ),
           ),
         );
       },
@@ -1149,7 +1393,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
   @override
   Widget build(BuildContext context) {
     final currentLocation =
-        _rideController.riderLocation ?? const LatLng(-1.286389, 36.817223);
+        _rideController.riderLocation ?? const LatLng(-0.3031, 36.0800);
 
     return Scaffold(
       backgroundColor: Colors.grey.shade100,
@@ -1192,87 +1436,6 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                         onTap: _handleMapTap,
                       ),
                     ),
-
-                    if (_currentRideState == RideState.inTransit ||
-                        _currentWaypointIndex > 0)
-                      Positioned(
-                        top: 20,
-                        left: 20,
-                        right: 20,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 20, vertical: 14),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.9),
-                            borderRadius: BorderRadius.circular(16),
-                            boxShadow: const [
-                              BoxShadow(
-                                color: Colors.black38,
-                                blurRadius: 10,
-                                offset: Offset(0, 4),
-                              ),
-                            ],
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Text(
-                                    'LIVE TAXIMETER FARE',
-                                    style: TextStyle(
-                                      color: Colors.white54,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
-                                      letterSpacing: 1.2,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'KSh ${_liveRunningFareKsh.toStringAsFixed(0)}',
-                                    style: const TextStyle(
-                                      color: Colors.amber,
-                                      fontSize: 26,
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              Container(
-                                height: 35,
-                                width: 1,
-                                color: Colors.white24,
-                              ),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Text(
-                                    'DISTANCE ELAPSED',
-                                    style: TextStyle(
-                                      color: Colors.white54,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
-                                      letterSpacing: 1.2,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    '${_liveTraveledDistanceKm.toStringAsFixed(2)} KM',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
 
                     // Premium Hybrid Floating Avatar Button
                     Positioned(
@@ -1539,6 +1702,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            _buildLiveTaximeterDock(),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -1565,6 +1729,12 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
                     color: Colors.grey)),
+            const SizedBox(height: 10),
+            LinearProgressIndicator(
+              value: _movingProgress,
+              color: Colors.orange,
+              backgroundColor: Colors.orange.shade50,
+            ),
           ],
         );
 
@@ -1600,6 +1770,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            _buildLiveTaximeterDock(),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [

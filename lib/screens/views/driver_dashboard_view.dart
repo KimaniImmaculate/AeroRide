@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
+import '../../utils/fare_calculator.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 
@@ -96,6 +97,9 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
 
   final Set<Polyline> _mapPolylines = {};
   final Set<Marker> _mapMarkers = {};
+
+  // Import fare calculator helpers
+  // Note: uses lib/utils/fare_calculator.dart
 
   @override
   void initState() {
@@ -344,6 +348,73 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
         ),
       );
     }
+  }
+
+  Widget _buildDriverTaximeterDock() {
+    if (!_isTripActive && _driverWaypointIndex == 0 && !_isSearchingForRides) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.92),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'DRIVER EARNINGS',
+                style: TextStyle(
+                  color: Colors.white54,
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'KSh ${_driverLiveEarningsKsh.toStringAsFixed(0)}',
+                style: const TextStyle(
+                  color: Colors.lightGreenAccent,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+          Container(height: 24, width: 1, color: Colors.white24),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'TOTAL FARE',
+                style: TextStyle(
+                  color: Colors.white54,
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'KSh ${_passengerLiveFareKsh.toStringAsFixed(0)}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildDriverWorkflowControls() {
@@ -736,6 +807,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   void _startNavigationSimulation({required bool toPickup}) {
     _simulationTimer?.cancel();
     _transitProgress = 0.0;
+    final startingEtaMinutes = _etaMinutes <= 0 ? 5 : _etaMinutes;
 
     LatLng startPosition = _driverCurrentLocation;
     LatLng targetPosition = toPickup
@@ -765,7 +837,9 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
         } else {
           _driverCurrentLocation = _interpolatePoints(
               startPosition, targetPosition, _transitProgress);
-          if (timer.tick % 12 == 0 && _etaMinutes > 1) _etaMinutes--;
+          _etaMinutes = ((1.0 - _transitProgress) * startingEtaMinutes)
+              .ceil()
+              .clamp(0, startingEtaMinutes);
         }
 
         _rebuildMapElements();
@@ -809,84 +883,136 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
     final pickupLatLng = selectedRequest.pickupCoords;
     final destinationLatLng = selectedRequest.destinationCoords;
 
-    final url =
-        'https://maps.googleapis.com/maps/api/directions/json?origin=${pickupLatLng.latitude},${pickupLatLng.longitude}&destination=${destinationLatLng.latitude},${destinationLatLng.longitude}&key=AIzaSyANuwPwm1dRFvh_ySIIiW22-dWnUsMrp0k';
-
     try {
-      final response = await http.get(Uri.parse(url));
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      const url = 'https://routes.googleapis.com/directions/v2:computeRoutes';
 
-      if (data['status'] == 'OK') {
-        final encodedPolyline =
-            data['routes'][0]['overview_polyline']['points'] as String;
-        final decodedPoints = PolylinePoints.decodePolyline(encodedPolyline);
-
-        setState(() {
-          _driverActualRoadPoints = decodedPoints
-              .map((point) => LatLng(point.latitude, point.longitude))
-              .toList();
-          _currentDriverState = DriverRideState.passengerInTransit;
-        });
-
-        double calculateDistance(LatLng p1, LatLng p2) {
-          var p = 0.017453292519943295;
-          var a = 0.5 -
-              math.cos((p2.latitude - p1.latitude) * p) / 2 +
-              math.cos(p1.latitude * p) *
-                  math.cos(p2.latitude * p) *
-                  (1 - math.cos((p2.longitude - p1.longitude) * p)) /
-                  2;
-          return 12742 * math.asin(math.sqrt(a));
-        }
-
-        _driverSimulationTimer?.cancel();
-        _driverSimulationTimer = Timer.periodic(
-          const Duration(milliseconds: 400),
-          (timer) {
-            // Look inside your Timer.periodic hook in driver_dashboard_view.dart:
-            if (_driverWaypointIndex >= _driverActualRoadPoints.length) {
-              timer.cancel();
-              setState(() {
-                _isTripActive = false;
-                _isAwaitingPayment =
-                    true; // Core Fix: Lock app into payment authorization state
-                _paymentReceived = false;
-                _isProcessingPaymentPush = false;
-              });
-              return;
+      final response = await http.post(
+        Uri.parse(url),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': 'AIzaSyANuwPwm1dRFvh_ySIIiW22-dWnUsMrp0k',
+          'X-Goog-FieldMask':
+              'routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline',
+        },
+        body: jsonEncode({
+          'origin': {
+            'location': {
+              'latLng': {
+                'latitude': pickupLatLng.latitude,
+                'longitude': pickupLatLng.longitude,
+              }
             }
+          },
+          'destination': {
+            'location': {
+              'latLng': {
+                'latitude': destinationLatLng.latitude,
+                'longitude': destinationLatLng.longitude,
+              }
+            }
+          },
+          'travelMode': 'DRIVE',
+          'routingPreference': 'TRAFFIC_AWARE',
+        }),
+      );
 
-            final currentPos = _driverActualRoadPoints[_driverWaypointIndex];
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final routes = data['routes'] as List<dynamic>?;
 
+      if (routes == null || routes.isEmpty) {
+        debugPrint(
+            'Driver phase routing aborted: No routes returned. Response: ${response.body}');
+        return;
+      }
+
+      final route = routes[0] as Map<String, dynamic>;
+      final polylineData = route['polyline'] as Map<String, dynamic>?;
+      final encodedPolyline = polylineData?['encodedPolyline']?.toString();
+
+      if (encodedPolyline == null || encodedPolyline.isEmpty) {
+        debugPrint(
+            'Driver phase routing aborted: No polyline points available.');
+        return;
+      }
+
+      final decodedPoints = PolylinePoints.decodePolyline(encodedPolyline);
+      final roadPoints = decodedPoints
+          .map((point) => LatLng(point.latitude, point.longitude))
+          .toList();
+
+      double calculateDistance(LatLng p1, LatLng p2) {
+        const p = 0.017453292519943295;
+        final a = 0.5 -
+            math.cos((p2.latitude - p1.latitude) * p) / 2 +
+            math.cos(p1.latitude * p) *
+                math.cos(p2.latitude * p) *
+                (1 - math.cos((p2.longitude - p1.longitude) * p)) /
+                2;
+        return 12742 * math.asin(math.sqrt(a));
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        _driverActualRoadPoints = roadPoints;
+        _currentDriverState = DriverRideState.passengerInTransit;
+      });
+
+      final durationString = route['duration'] as String?;
+      if (durationString != null && durationString.endsWith('s')) {
+        final seconds = num.tryParse(durationString.replaceAll('s', '')) ?? 0;
+        if (seconds > 0 && mounted) {
+          setState(() {
+            _etaMinutes = (seconds / 60).ceil();
+          });
+        }
+      }
+
+      _driverSimulationTimer?.cancel();
+      _driverSimulationTimer = Timer.periodic(
+        const Duration(milliseconds: 400),
+        (timer) {
+          if (_driverWaypointIndex >= _driverActualRoadPoints.length) {
+            timer.cancel();
             setState(() {
-              LatLng currentPos = _driverActualRoadPoints[_driverWaypointIndex];
-              if (_driverWaypointIndex > 0) {
-                double segment = calculateDistance(
-                    _driverActualRoadPoints[_driverWaypointIndex - 1],
-                    currentPos);
+              _isTripActive = false;
+              _isAwaitingPayment = true;
+              _paymentReceived = false;
+              _isProcessingPaymentPush = false;
+            });
+            return;
+          }
+
+          final currentPos = _driverActualRoadPoints[_driverWaypointIndex];
+
+          setState(() {
+            if (_driverWaypointIndex > 0) {
+              final previousPos =
+                  _driverActualRoadPoints[_driverWaypointIndex - 1];
+              final segment = calculateDistance(previousPos, currentPos);
+              // Ignore very small noisy movements
+              if (segment >= kSegmentThresholdKm) {
                 _driverTraveledDistanceKm += segment;
               }
+            }
 
-              // Live total bill calculation
-              _passengerLiveFareKsh =
-                  100.0 + (_driverTraveledDistanceKm * 90.0);
+            // Compute fares using centralized helper (MVP constants)
+            final fareResult =
+                computeFareAndEarnings(_driverTraveledDistanceKm, 0.0);
+            _passengerLiveFareKsh = fareResult.passengerFare;
+            _driverLiveEarningsKsh = fareResult.driverEarnings;
+            _driverWaypointIndex++;
+          });
 
-              // ✅ MATCHING MATH FLUSH: Driver gets exactly 80% of what the passenger pays
-              _driverLiveEarningsKsh = _passengerLiveFareKsh * 0.80;
-
-              _driverWaypointIndex++;
-            });
-
-            _mapController?.animateCamera(
-              CameraUpdate.newLatLng(
-                _driverActualRoadPoints[_driverWaypointIndex - 1],
-              ),
-            );
-          },
-        );
-      }
+          _mapController?.animateCamera(
+            CameraUpdate.newLatLng(
+              _driverActualRoadPoints[_driverWaypointIndex - 1],
+            ),
+          );
+        },
+      );
     } catch (e) {
-      debugPrint('Driver local simulation routing error: $e');
+      debugPrint('Driver phase routing failed: $e');
     }
   }
 
@@ -914,14 +1040,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
         );
       }
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Trip successfully logged to Cloud History Ledger!'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
+      debugPrint('Trip logged to cloud history ledger.');
     } catch (e) {
       debugPrint('Failed logging history record: $e');
     }
@@ -1162,65 +1281,6 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                             }
                           : {},
                     ),
-                    if (_isTripActive ||
-                        (_driverWaypointIndex > 0 &&
-                            !_isSearchingForRides &&
-                            !_paymentReceived))
-                      Positioned(
-                        top: 40,
-                        left: 15,
-                        right: 15,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 12),
-                          decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.92),
-                              borderRadius: BorderRadius.circular(12)),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Text('DRIVE INCOME (80%)',
-                                      style: TextStyle(
-                                          color: Colors.white54,
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.bold)),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                      'KSh ${_driverLiveEarningsKsh.toStringAsFixed(0)}',
-                                      style: const TextStyle(
-                                          color: Colors.lightGreenAccent,
-                                          fontSize: 20,
-                                          fontWeight: FontWeight.w900)),
-                                ],
-                              ),
-                              Container(
-                                  height: 24, width: 1, color: Colors.white24),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Text('TOTAL FARE',
-                                      style: TextStyle(
-                                          color: Colors.white54,
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.bold)),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                      'KSh ${_passengerLiveFareKsh.toStringAsFixed(0)}',
-                                      style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.bold)),
-                                ],
-                              )
-                            ],
-                          ),
-                        ),
-                      ),
                   ],
                 ),
               ),
@@ -1232,7 +1292,13 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                       const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
                   child: SingleChildScrollView(
                     physics: const BouncingScrollPhysics(),
-                    child: _buildDriverWorkflowControls(),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _buildDriverTaximeterDock(),
+                        _buildDriverWorkflowControls(),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -1348,7 +1414,10 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (context) => const WalletView(),
+                          builder: (context) => WalletView(
+                            currentBalance: _walletBalanceKsh,
+                            isDriver: true,
+                          ),
                         ),
                       );
                     },

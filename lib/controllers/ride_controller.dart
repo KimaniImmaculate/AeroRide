@@ -556,22 +556,42 @@ class RideController extends ChangeNotifier {
     if (_riderPositionSubscription != null) return;
 
     try {
+      if (kIsWeb) {
+        riderLocation = const LatLng(-0.3031, 36.0800);
+        _updateMarkersAndPolylines();
+        _fitCameraToRoute();
+        notifyListeners();
+        return;
+      }
+
       var permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
       }
 
+      // If permission is denied, use Nakuru as our fallback instead of killing the process!
       if (permission == LocationPermission.deniedForever ||
           permission == LocationPermission.denied) {
-        debugPrint('RideController: rider location permission denied');
+        debugPrint(
+            'RideController: rider location permission denied. Falling back to Nakuru.');
+
+        // 🇰🇪 Setting active fallback coordinates to Nakuru
+        riderLocation = const LatLng(-0.3031, 36.0800);
+
+        _updateMarkersAndPolylines();
+        _fitCameraToRoute(); // 🎥 Centers your map window onto the simulation
+        notifyListeners(); // 🔔 Wakes up the progress bar & ETA calculations
         return;
       }
 
       final current = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.bestForNavigation,
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+        ),
       );
       riderLocation = LatLng(current.latitude, current.longitude);
       _updateMarkersAndPolylines();
+      _fitCameraToRoute();
       notifyListeners();
 
       _riderPositionSubscription = Geolocator.getPositionStream(
@@ -586,6 +606,11 @@ class RideController extends ChangeNotifier {
       });
     } catch (e) {
       debugPrint('RideController: Failed to start rider tracking: $e');
+
+      // Secondary fallback safety if the GPS hardware fails entirely
+      riderLocation = const LatLng(-0.3031, 36.0800);
+      _updateMarkersAndPolylines();
+      notifyListeners();
     }
   }
 
