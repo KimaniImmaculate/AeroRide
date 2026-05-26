@@ -104,7 +104,6 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   @override
   void initState() {
     super.initState();
-    _autoTriggerIncomingRideSearch();
   }
 
   @override
@@ -117,7 +116,6 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
 
   void _autoTriggerIncomingRideSearch() {
     setState(() {
-      _isOnline = true;
       _isSearchingForRides = true;
       _availableRequests.clear();
       _activeRequest = null;
@@ -669,6 +667,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
               onPressed: () {
                 setState(() {
                   _paymentReceived = false;
+                  _isOnline = true;
                 });
                 _autoTriggerIncomingRideSearch();
               },
