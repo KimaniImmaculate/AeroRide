@@ -32,6 +32,7 @@ class RideRequest {
   });
 
   factory RideRequest.fromMap(Map<String, dynamic> map, String docId) {
+    final fareValue = (map['finalFareCharged'] ?? map['estimatedCost']) as num?;
     return RideRequest(
       id: docId,
       userId: map['userId'] ?? '',
@@ -44,7 +45,7 @@ class RideRequest {
       pickupAddress: map['pickupAddress'] ?? '',
       destinationAddress: map['destinationAddress'] ?? '',
       status: map['status'] ?? 'searching',
-      estimatedCost: (map['estimatedCost'] as num?)?.toDouble() ?? 0.0,
+      estimatedCost: fareValue?.toDouble() ?? 0.0,
       createdAt: (map['createdAt'] as Timestamp?)?.toDate(),
       updatedAt: (map['updatedAt'] as Timestamp?)?.toDate(),
       rideType: map['rideType'] ?? 'standard',
@@ -62,6 +63,7 @@ class RideRequest {
       'destinationAddress': destinationAddress,
       'status': status,
       'estimatedCost': estimatedCost,
+      'finalFareCharged': estimatedCost,
       'rideType': rideType ?? 'standard',
       if (createdAt != null) 'createdAt': Timestamp.fromDate(createdAt!),
       if (updatedAt != null) 'updatedAt': Timestamp.fromDate(updatedAt!),

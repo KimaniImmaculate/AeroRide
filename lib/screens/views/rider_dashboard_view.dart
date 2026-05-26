@@ -723,7 +723,8 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       'pickupAddress': _pickupAddressString,
       'destinationName': _destinationAddressString,
       'status': 'searching',
-      'fareKsh': _calculatedFareKsh,
+      'estimatedCost': _calculatedFareKsh,
+      'finalFareCharged': _calculatedFareKsh,
       'createdAt': FieldValue.serverTimestamp(),
     });
 
@@ -742,12 +743,12 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
           _destinationLocation!.latitude, _destinationLocation!.longitude),
       'currentVehicleLocation':
           GeoPoint(_driverLocation!.latitude, _driverLocation!.longitude),
-      'liveFareCharged': _calculatedFareKsh,
-      'driverEarningsLive': 0,
+      'finalFareCharged': _calculatedFareKsh,
+      'estimatedCost': _calculatedFareKsh,
+      'driverEarnings': 0,
       'pickupAddress': _pickupAddressString,
       'destinationName': _destinationAddressString,
       'status': 'accepted',
-      'fareKsh': _calculatedFareKsh,
       'createdAt': FieldValue.serverTimestamp(),
     });
 
@@ -927,14 +928,13 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                 'status': 'completed',
                 'finalFareCharged': _liveRunningFareKsh.round(),
                 'driverEarnings': _liveDriverEarningsKsh.round(),
-                'driverEarningsLive': _liveDriverEarningsKsh.round(),
-                'totalDistanceKm':
+                'distanceKm':
                     double.parse(_liveTraveledDistanceKm.toStringAsFixed(2)),
                 'currentVehicleLocation': GeoPoint(
                   _actualRoadPoints.last.latitude,
                   _actualRoadPoints.last.longitude,
                 ),
-                'liveFareCharged': _liveRunningFareKsh,
+                'estimatedCost': _liveRunningFareKsh,
                 'completedAt': FieldValue.serverTimestamp(),
               }),
             );
@@ -1051,12 +1051,15 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                 currentVehiclePosition.latitude,
                 currentVehiclePosition.longitude,
               ),
-              'liveFareCharged': phase == TravelPhase.riderToDestination
+              'finalFareCharged': phase == TravelPhase.riderToDestination
                   ? _liveRunningFareKsh.round()
                   : 100,
-              'distanceElapsedKm':
+              'estimatedCost': phase == TravelPhase.riderToDestination
+                  ? _liveRunningFareKsh.round()
+                  : 100,
+              'distanceKm':
                   double.parse(_liveTraveledDistanceKm.toStringAsFixed(2)),
-              'driverEarningsLive': _liveDriverEarningsKsh,
+              'driverEarnings': _liveDriverEarningsKsh,
               'updatedAt': FieldValue.serverTimestamp(),
             }),
           );

@@ -91,6 +91,7 @@ class SimulationService {
     final base = center ?? const LatLng(-1.2833, 36.8167);
 
     for (var i = 0; i < count; i++) {
+      final estimatedCost = 10 + rnd.nextDouble() * 20;
       final pickup = LatLng(
         base.latitude + (rnd.nextDouble() - 0.5) * 0.02,
         base.longitude + (rnd.nextDouble() - 0.5) * 0.02,
@@ -109,7 +110,8 @@ class SimulationService {
         'pickupAddress': 'Sim Pickup $i',
         'destinationAddress': 'Sim Drop $i',
         'status': 'searching',
-        'estimatedCost': 10 + rnd.nextDouble() * 20,
+        'estimatedCost': estimatedCost,
+        'finalFareCharged': estimatedCost,
       });
     }
   }
@@ -136,10 +138,8 @@ class SimulationService {
       pickup.longitude + 0.005,
     );
     try {
-      final doc = await _db
-          .collection(_simulatedDriversCollection)
-          .doc(driverId)
-          .get();
+      final doc =
+          await _db.collection(_simulatedDriversCollection).doc(driverId).get();
       if (doc.exists && doc.data()?['current_location'] != null) {
         final gp = doc.data()!['current_location'] as GeoPoint;
         driverStart = LatLng(gp.latitude, gp.longitude);
@@ -181,9 +181,9 @@ class SimulationService {
                 .collection(_simulatedDriversCollection)
                 .doc(driverId)
                 .set({
-                  'current_location': GeoPoint(pos.latitude, pos.longitude),
-                  'updatedAt': Timestamp.now(),
-                }, SetOptions(merge: true));
+              'current_location': GeoPoint(pos.latitude, pos.longitude),
+              'updatedAt': Timestamp.now(),
+            }, SetOptions(merge: true));
             step++;
           } else {
             // Arrived at pickup
@@ -221,12 +221,12 @@ class SimulationService {
                 .collection(_simulatedDriversCollection)
                 .doc(driverId)
                 .set({
-                  'current_location': GeoPoint(
-                    destination.latitude,
-                    destination.longitude,
-                  ),
-                  'updatedAt': Timestamp.now(),
-                }, SetOptions(merge: true));
+              'current_location': GeoPoint(
+                destination.latitude,
+                destination.longitude,
+              ),
+              'updatedAt': Timestamp.now(),
+            }, SetOptions(merge: true));
             leg = 4;
             timer.cancel();
             _rideSimulationTimer = null;

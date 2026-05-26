@@ -95,6 +95,7 @@ class FirestoreService {
         tx.set(rideRef, {
           ...rideRequest.toMap(),
           'estimatedCost': fare,
+          'finalFareCharged': fare,
           'createdAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
           'paymentStatus': 'pending',
@@ -119,6 +120,7 @@ class FirestoreService {
       await rideRef.set({
         ...rideRequest.toMap(),
         'estimatedCost': fare,
+        'finalFareCharged': fare,
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
         'paymentStatus': 'pending',
@@ -233,7 +235,10 @@ class FirestoreService {
         throw Exception('Ride driver mismatch');
       }
 
-      final amount = (rideData['estimatedCost'] as num?)?.toDouble() ?? fare;
+      final amount =
+          ((rideData['finalFareCharged'] ?? rideData['estimatedCost']) as num?)
+                  ?.toDouble() ??
+              fare;
       final riderWalletSnapshot = await tx.get(riderWalletRef);
       final riderWalletData = riderWalletSnapshot.data();
       final riderBalance =
@@ -288,7 +293,10 @@ class FirestoreService {
         throw Exception('Ride data missing');
       }
 
-      final amount = (rideData['estimatedCost'] as num?)?.toDouble() ?? 0.0;
+      final amount =
+          ((rideData['finalFareCharged'] ?? rideData['estimatedCost']) as num?)
+                  ?.toDouble() ??
+              0.0;
       final walletSnapshot = await tx.get(riderWalletRef);
       final walletData = walletSnapshot.data();
       final balance = (walletData?['balance'] as num?)?.toDouble() ?? 0.0;

@@ -75,10 +75,14 @@ class RiderProfileScreen extends StatelessWidget {
           itemBuilder: (context, index) {
             final data =
                 snapshot.data!.docs[index].data() as Map<String, dynamic>;
-            final dynamic fareValue =
-                data['finalFareCharged'] ?? data['liveFareCharged'] ?? 0;
-            final dynamic distanceValue =
-                data['distanceElapsedKm'] ?? data['totalDistanceKm'] ?? '0.0';
+            final dynamic fareValue = data['finalFareCharged'] ??
+                data['estimatedCost'] ??
+                data['liveFareCharged'] ??
+                0;
+            final dynamic distanceValue = data['distanceKm'] ??
+                data['distanceElapsedKm'] ??
+                data['totalDistanceKm'] ??
+                '0.0';
 
             return Card(
               margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),

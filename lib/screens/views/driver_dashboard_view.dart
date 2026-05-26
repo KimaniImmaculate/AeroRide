@@ -792,7 +792,8 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
             _driverCurrentLocation.latitude,
             _driverCurrentLocation.longitude,
           ),
-          'liveFareCharged': selectedRide['fareKsh'],
+          'finalFareCharged': selectedRide['estimatedFare'],
+          'estimatedCost': selectedRide['estimatedFare'],
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true)),
       );
@@ -867,7 +868,6 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
         'destinationName': selectedRequest.destinationName,
         'pickupLatLng': selectedRequest.pickupCoords,
         'destinationLatLng': selectedRequest.destinationCoords,
-        'fareKsh': selectedRequest.estimatedFare,
       };
       _isTripActive = true;
       _hasIncomingRequest = false;
@@ -1029,10 +1029,12 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
             'driverId': widget.user.uid,
             'driverName': widget.user.displayName ?? 'AeroRide Partner',
             'status': 'completed',
-            'distanceElapsedKm':
+            'distanceKm':
                 double.parse(_driverTraveledDistanceKm.toStringAsFixed(2)),
             'finalFareCharged': _passengerLiveFareKsh.round(),
+            'estimatedCost': _passengerLiveFareKsh.round(),
             'driverEarningsLog': _driverLiveEarningsKsh.round(),
+            'driverEarnings': _driverLiveEarningsKsh.round(),
             'completedAt': FieldValue.serverTimestamp(),
           },
           SetOptions(merge: true),
