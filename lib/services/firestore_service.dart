@@ -153,6 +153,27 @@ class FirestoreService {
         );
   }
 
+  Stream<List<RideRequest>> watchOpenRideRequests({int limit = 50}) {
+    return _db
+        .collection('rides')
+        .where('status', isEqualTo: 'searching')
+        .limit(limit)
+        .snapshots()
+        .map(
+      (snapshot) {
+        final rides = snapshot.docs
+            .map((doc) => RideRequest.fromMap(doc.data(), doc.id))
+            .toList();
+        rides.sort((a, b) {
+          final aTime = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final bTime = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          return bTime.compareTo(aTime);
+        });
+        return rides.take(limit).toList();
+      },
+    );
+  }
+
   Stream<List<RideRequest>> watchActiveDriverRides(String driverId) {
     return _db
         .collection('rides')

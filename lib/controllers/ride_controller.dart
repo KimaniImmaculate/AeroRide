@@ -3,6 +3,7 @@ import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:aeroride/models/ride_request_model.dart';
 import 'package:aeroride/utils/location_extensions.dart';
@@ -172,9 +173,13 @@ class RideController extends ChangeNotifier {
     required LatLng pickup,
     required int limit,
   }) async {
+    if (FirebaseAuth.instance.currentUser == null) {
+      return;
+    }
+
     try {
       final nearby = await _driversService
-          .getTopNearbyDrivers(pickup.latitude, pickup.longitude, limit: limit)
+          .getSelectableDrivers(referenceLocation: pickup, limit: limit)
           .timeout(const Duration(seconds: 4), onTimeout: () => []);
 
       nearbyDriverPreviews = nearby;
@@ -283,7 +288,7 @@ class RideController extends ChangeNotifier {
     if (_driverSubscription != null) return;
 
     _driverSubscription = FirebaseFirestore.instance
-        .collection('drivers')
+        .collection('users')
         .doc(driverId)
         .snapshots()
         .listen((snapshot) {
@@ -673,7 +678,7 @@ class RideController extends ChangeNotifier {
         String? chosen;
         for (final id in candidateDriverIds) {
           final driverDoc = await tx.get(
-            FirebaseFirestore.instance.collection('drivers').doc(id),
+            FirebaseFirestore.instance.collection('users').doc(id),
           );
           final driverData = driverDoc.data();
           if (driverData != null && (driverData['isOnline'] == true)) {
@@ -699,7 +704,7 @@ class RideController extends ChangeNotifier {
 
     try {
       final driverDoc = await FirebaseFirestore.instance
-          .collection('drivers')
+          .collection('users')
           .doc(ride.driverId)
           .get();
       final driverData = driverDoc.data();

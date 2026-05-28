@@ -19,6 +19,7 @@ import '../../models/ride_request_model.dart';
 import '../../models/ride_type_model.dart';
 import '../../models/user_model.dart';
 import '../../services/firestore_service.dart';
+import '../../services/drivers_service.dart';
 import '../../theme/aeroride_theme.dart';
 import '../../utils/currency.dart';
 import '../../utils/browser_geolocation.dart';
@@ -91,6 +92,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
   Map<String, dynamic>? _selectedDriver;
   List<Map<String, dynamic>> _availableDriversPool = [];
+  final DriversService _driversService = DriversService();
   final Set<Polyline> _mapPolylines = {};
   final Set<Marker> _mapMarkers = {};
 
@@ -140,27 +142,42 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
     super.dispose();
   }
 
-  void _ensureMockDriversPool(LatLng aroundPoint) {
-    if (_availableDriversPool.isNotEmpty) return;
+  // Load nearby drivers from Firestore via DriversService
+  Future<void> _loadNearbyDrivers(LatLng aroundPoint) async {
+    try {
+      await _driversService.debugProbeUsersRead();
 
-    _availableDriversPool = [
-      {
-        "name": "James Kamau",
-        "vehicle": "KDD 555Y - Silver Nissan Leaf",
-        "rating": "4.9",
-        "eta": 3,
-        "lat": aroundPoint.latitude + 0.003,
-        "lng": aroundPoint.longitude + 0.003
-      },
-      {
-        "name": "Sarah Mwangi",
-        "vehicle": "KCA 123Z - White Toyota Prius",
-        "rating": "4.8",
-        "eta": 5,
-        "lat": aroundPoint.latitude - 0.002,
-        "lng": aroundPoint.longitude + 0.002
-      }
-    ];
+      final drivers = await _driversService.getSelectableDrivers(
+        referenceLocation: aroundPoint,
+        limit: 6,
+      );
+
+      try {
+        debugPrint(
+            'RiderDashboardView: fetched ${drivers.length} selectable drivers');
+        debugPrint('RiderDashboardView: ids=' +
+            drivers.map((d) => d['id'] as String? ?? '').join(','));
+      } catch (_) {}
+
+      setState(() {
+        _availableDriversPool = drivers.map((d) {
+          final raw = d['raw'] as Map<String, dynamic>? ?? {};
+          final loc = d['location'] as LatLng?;
+          return {
+            'id': d['driverId'] ?? raw['driverId'] ?? '',
+            'name': d['name'] ?? raw['name'] ?? 'Driver',
+            'vehicle':
+                d['vehicle'] ?? raw['vehicle'] ?? raw['vehicleInfo'] ?? '',
+            'rating': (d['rating'] ?? raw['rating'] ?? 4.8).toString(),
+            'eta': d['eta'] ?? 5,
+            'lat': loc?.latitude ?? d['lat'] ?? aroundPoint.latitude,
+            'lng': loc?.longitude ?? d['lng'] ?? aroundPoint.longitude,
+          };
+        }).toList();
+      });
+    } catch (e) {
+      debugPrint('Failed loading nearby drivers: $e');
+    }
   }
 
   Widget _buildLiveTaximeterDock() {
@@ -453,25 +470,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       final fare = computeFareAndEarnings(distanceInKm, 0.0);
       _calculatedFareKsh = fare.passengerFare;
 
-      // 4. Generate custom nearby vehicle pool
-      _availableDriversPool = [
-        {
-          "name": "James Kamau",
-          "vehicle": "KDD 555Y - Silver Nissan Leaf",
-          "rating": "4.9",
-          "eta": 3,
-          "lat": _riderLocation!.latitude + 0.003,
-          "lng": _riderLocation!.longitude + 0.003
-        },
-        {
-          "name": "Sarah Mwangi",
-          "vehicle": "KCA 123Z - White Toyota Prius",
-          "rating": "4.8",
-          "eta": 5,
-          "lat": _riderLocation!.latitude - 0.002,
-          "lng": _riderLocation!.longitude + 0.002
-        }
-      ];
+      await _loadNearbyDrivers(_riderLocation!);
 
       setState(() {
         _currentRideState = RideState.driverSelection;
@@ -557,7 +556,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       final distanceKm = distanceMeters / 1000.0;
 
       final driverAnchor = _riderLocation ?? origin;
-      _ensureMockDriversPool(driverAnchor);
+      await _loadNearbyDrivers(driverAnchor);
 
       final durationString = route['duration'] as String? ?? '0s';
       final durationSeconds =
@@ -651,13 +650,13 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                     final dest = LatLng(geo.latitude, geo.longitude);
 
                     setState(() {
-                      _ensureMockDriversPool(origin);
                       _destinationLocation = dest;
                       _destinationAddressString = destinationName;
                       _destinationTextController.text = destinationName;
                       _currentRideState = RideState.driverSelection;
                     });
 
+                    await _loadNearbyDrivers(origin);
                     await _calculateRouteAndPricing(origin, dest);
                   },
                   leading: const CircleAvatar(

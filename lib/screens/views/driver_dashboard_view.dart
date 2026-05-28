@@ -17,6 +17,8 @@ import 'support_view.dart';
 import 'wallet_view.dart';
 import '../../theme/aeroride_theme.dart';
 import '../role_selection_screen.dart';
+import '../../services/firestore_service.dart';
+import '../../models/ride_request_model.dart';
 
 class MockRideRequest {
   final String id;
@@ -83,6 +85,9 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   double _walletBalanceKsh =
       1450.00; // Starting mock balance for the driver wallet
 
+  final FirestoreService _firestoreService = FirestoreService();
+  StreamSubscription<List<RideRequest>>? _driverRequestsSub;
+
   LatLng _driverCurrentLocation = const LatLng(-0.2831, 36.0664);
 
   final LatLng _mockDriverCurrentLocation = const LatLng(-0.28496, 36.06795);
@@ -115,6 +120,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   }
 
   void _autoTriggerIncomingRideSearch() {
+    _driverRequestsSub?.cancel();
     setState(() {
       _isSearchingForRides = true;
       _availableRequests.clear();
@@ -122,45 +128,36 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       _hasIncomingRequest = false;
       _isTripActive = false;
 
-      // ✅ CRITICAL REFRESH FLUSH LINE: Clear index tracker instantly
+      // Clear the local trip simulation state before listening for live rides.
       _driverWaypointIndex = 0;
       _driverActualRoadPoints.clear();
     });
 
-    Timer(const Duration(seconds: 5), () {
+    _driverRequestsSub =
+        _firestoreService.watchOpenRideRequests().listen((rideList) {
+      if (!mounted) return;
+      setState(() {
+        _availableRequests = rideList.map((r) {
+          return MockRideRequest(
+            id: r.id ?? r.userId,
+            riderName: r.userId,
+            pickupName: r.pickupAddress,
+            destinationName: r.destinationAddress,
+            pickupCoords:
+                LatLng(r.pickupLocation.latitude, r.pickupLocation.longitude),
+            destinationCoords: LatLng(r.destinationLocation.latitude,
+                r.destinationLocation.longitude),
+            estimatedFare: r.estimatedCost,
+          );
+        }).toList();
+        _hasIncomingRequest = _availableRequests.isNotEmpty;
+        _isSearchingForRides = false;
+      });
+    }, onError: (e) {
+      debugPrint('Driver requests stream error: $e');
       if (!mounted) return;
       setState(() {
         _isSearchingForRides = false;
-        _availableRequests = [
-          MockRideRequest(
-            id: 'TRIP_001',
-            riderName: 'Mary W.',
-            pickupName: 'Westside Mall Nakuru',
-            destinationName: 'Milimani Estate',
-            pickupCoords: const LatLng(-0.2872, 36.0617),
-            destinationCoords: const LatLng(-0.2743, 36.0692),
-            estimatedFare: 250.0,
-          ),
-          MockRideRequest(
-            id: 'TRIP_002',
-            riderName: 'John K.',
-            pickupName: 'Nakuru Main Stage',
-            destinationName: 'Section 58',
-            pickupCoords: const LatLng(-0.2899, 36.0712),
-            destinationCoords: const LatLng(-0.2845, 36.0941),
-            estimatedFare: 380.0,
-          ),
-          MockRideRequest(
-            id: 'TRIP_003',
-            riderName: 'David O.',
-            pickupName: 'Nakuru Blankets Factory',
-            destinationName: 'Lanet Corner',
-            pickupCoords: const LatLng(-0.2985, 36.0620),
-            destinationCoords: const LatLng(-0.2952, 36.1345),
-            estimatedFare: 620.0,
-          ),
-        ];
-        _hasIncomingRequest = _availableRequests.isNotEmpty;
       });
     });
   }
@@ -1380,9 +1377,12 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                             setState(() {
                               _isOnline = value;
                               if (!_isOnline) {
+                                // Go offline: cancel live subscription and clear market
                                 _isSearchingForRides = false;
                                 _availableRequests.clear();
                                 _driverSimulationTimer?.cancel();
+                                _driverRequestsSub?.cancel();
+                                _driverRequestsSub = null;
                               } else {
                                 _autoTriggerIncomingRideSearch();
                               }

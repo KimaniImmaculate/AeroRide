@@ -22,6 +22,13 @@ service cloud.firestore {
       return isRideRider(data) || isRideDriver(data);
     }
 
+    function isCandidateDriverRide(data) {
+      return signedIn() &&
+        data.status == 'searching' &&
+        data.keys().hasAny(['candidateDrivers']) &&
+        data.candidateDrivers.hasAny([request.auth.uid]);
+    }
+
     // Validate allowed ride state transitions entirely in security rules.
     function isValidStatusTransition(prev, next) {
       return (
@@ -33,7 +40,9 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read, create, update: if isSelf(userId);
+      // TEMP: allow any signed-in client to read users while debugging driver lookup
+      allow read: if isSelf(userId) || signedIn();
+      allow create, update: if isSelf(userId);
       allow delete: if false;
     }
 
@@ -44,7 +53,9 @@ service cloud.firestore {
     }
 
     match /rides/{rideId} {
-      allow read: if isRideParticipant(resource.data);
+      allow read: if isRideParticipant(resource.data) || isCandidateDriverRide(resource.data) || (
+        signedIn() && resource.data.status == 'searching'
+      );
 
       // Riders create the ride request; driver assignment happens later.
       allow create: if signedIn()
@@ -54,7 +65,11 @@ service cloud.firestore {
 
       // Allow updates only when the status transition is valid.
       allow update: if signedIn()
-        && isRideParticipant(resource.data)
+        && (
+          isRideParticipant(resource.data) ||
+          isCandidateDriverRide(resource.data) ||
+          (resource.data.status == 'searching' && request.resource.data.status == 'accepted' && request.resource.data.driverId == request.auth.uid)
+        )
         && isValidStatusTransition(resource.data.status, request.resource.data.status)
         && (
           // Rider can cancel their own ride.
