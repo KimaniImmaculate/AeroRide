@@ -4,6 +4,7 @@ import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
@@ -23,6 +24,7 @@ import '../../models/ride_request_model.dart';
 class MockRideRequest {
   final String id;
   final String riderName;
+  final DateTime? createdAt;
   final String pickupName;
   final String destinationName;
   final LatLng pickupCoords;
@@ -32,6 +34,7 @@ class MockRideRequest {
   MockRideRequest({
     required this.id,
     required this.riderName,
+    required this.createdAt,
     required this.pickupName,
     required this.destinationName,
     required this.pickupCoords,
@@ -59,6 +62,7 @@ class DriverDashboardView extends StatefulWidget {
 // ⚠️ FIXED: The variables were sitting here out in the open. They have been moved inside the class below.
 
 class _DriverDashboardViewState extends State<DriverDashboardView> {
+  static const double kSegmentThresholdKm = 0.0001;
   GoogleMapController? _mapController;
   DriverRideState _currentDriverState = DriverRideState.searchingRequests;
 
@@ -109,13 +113,18 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        unawaited(_determineDriverGPSLocation());
+      }
+    });
   }
 
   @override
   void dispose() {
     _driverSimulationTimer?.cancel();
     _simulationTimer?.cancel();
-    _mapController?.dispose();
+    _mapController = null;
     super.dispose();
   }
 
@@ -133,21 +142,39 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       _driverActualRoadPoints.clear();
     });
 
-    _driverRequestsSub =
-        _firestoreService.watchOpenRideRequests().listen((rideList) {
+    _driverRequestsSub = _firestoreService
+        .watchSimpleOpenRides(collectionName: 'ride_requests')
+        .listen((rideList) {
       if (!mounted) return;
       setState(() {
         _availableRequests = rideList.map((r) {
+          final distanceKm = Geolocator.distanceBetween(
+                r.pickupLocation.latitude,
+                r.pickupLocation.longitude,
+                r.destinationLocation.latitude,
+                r.destinationLocation.longitude,
+              ) /
+              1000.0;
+          final fallbackFare =
+              computeFareAndEarnings(distanceKm, 0.0).passengerFare;
+          final displayedFare =
+              r.estimatedCost > 0 ? r.estimatedCost : fallbackFare;
+
           return MockRideRequest(
             id: r.id ?? r.userId,
-            riderName: r.userId,
-            pickupName: r.pickupAddress,
-            destinationName: r.destinationAddress,
+            riderName: r.riderName ?? r.userId,
+            createdAt: r.createdAt,
+            pickupName: r.pickupAddress.isNotEmpty
+                ? r.pickupAddress
+                : '${r.pickupLocation.latitude}, ${r.pickupLocation.longitude}',
+            destinationName: r.destinationAddress.isNotEmpty
+                ? r.destinationAddress
+                : '${r.destinationLocation.latitude}, ${r.destinationLocation.longitude}',
             pickupCoords:
                 LatLng(r.pickupLocation.latitude, r.pickupLocation.longitude),
             destinationCoords: LatLng(r.destinationLocation.latitude,
                 r.destinationLocation.longitude),
-            estimatedFare: r.estimatedCost,
+            estimatedFare: displayedFare,
           );
         }).toList();
         _hasIncomingRequest = _availableRequests.isNotEmpty;
@@ -160,6 +187,16 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
         _isSearchingForRides = false;
       });
     });
+  }
+
+  String _formatRequestTime(DateTime? time) {
+    if (time == null) return 'Time unknown';
+    final local = time.toLocal();
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    final day = local.day.toString().padLeft(2, '0');
+    final month = local.month.toString().padLeft(2, '0');
+    return '$day/$month ${hour}:$minute';
   }
 
   // =========================================================================
@@ -333,6 +370,8 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       _mapController?.animateCamera(
         CameraUpdate.newLatLng(_driverCurrentLocation),
       );
+
+      _autoTriggerIncomingRideSearch();
     } catch (e) {
       debugPrint('Failed to determine driver GPS location: $e');
       if (!mounted) return;
@@ -519,6 +558,11 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                             ],
                           ),
                           const SizedBox(height: 4),
+                          Text(
+                              "Created: ${_formatRequestTime(request.createdAt)}",
+                              style: const TextStyle(
+                                  fontSize: 11, color: Colors.black54),
+                              overflow: TextOverflow.ellipsis),
                           Text("From: ${request.pickupName}",
                               style: const TextStyle(
                                   fontSize: 11, color: Colors.black54),
@@ -533,8 +577,18 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                                 backgroundColor: Colors.black,
                                 foregroundColor: Colors.white,
                                 minimumSize: const Size.fromHeight(36)),
-                            onPressed: () =>
-                                _startLocalDriverTripSimulation(request),
+                            onPressed: () {
+                              _acceptRideRequest({
+                                'id': request.id,
+                                'riderName': request.riderName,
+                                'pickupLatLng': request.pickupCoords,
+                                'destinationLatLng': request.destinationCoords,
+                                'estimatedFare': request.estimatedFare,
+                                'pickupName': request.pickupName,
+                                'destinationName': request.destinationName,
+                                'createdAt': request.createdAt,
+                              });
+                            },
                             child: const Text("ACCEPT JOB",
                                 style: TextStyle(
                                     fontSize: 12, fontWeight: FontWeight.bold)),
@@ -754,7 +808,22 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
     );
   }
 
-  void _acceptRideRequest(Map<String, dynamic> selectedRide) {
+  Future<void> _acceptRideRequest(Map<String, dynamic> selectedRide) async {
+    if (_isTripActive) {
+      debugPrint('Accept ignored: trip already active.');
+      return;
+    }
+
+    final pickupLatLng = selectedRide['pickupLatLng'] as LatLng? ??
+        selectedRide['pickupCoords'] as LatLng?;
+    final destinationLatLng = selectedRide['destinationLatLng'] as LatLng? ??
+        selectedRide['destinationCoords'] as LatLng?;
+    if (pickupLatLng == null || destinationLatLng == null) {
+      debugPrint(
+          'Accept ride aborted: missing pickup/destination coordinates.');
+      return;
+    }
+
     setState(() {
       _activeRideData = selectedRide;
       activeRideDocId = selectedRide['id']?.toString();
@@ -763,87 +832,120 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       double distanceMeters = Geolocator.distanceBetween(
         _driverCurrentLocation.latitude,
         _driverCurrentLocation.longitude,
-        selectedRide['pickupLatLng'].latitude,
-        selectedRide['pickupLatLng'].longitude,
+        pickupLatLng.latitude,
+        pickupLatLng.longitude,
       );
       _etaMinutes = ((distanceMeters / 1000) * 2).round().clamp(2, 25);
     });
 
-    final rideDocId = activeRideDocId;
-    if (rideDocId != null && rideDocId.isNotEmpty) {
-      unawaited(
-        FirebaseFirestore.instance.collection('rides').doc(rideDocId).set({
-          'id': rideDocId,
-          'driverId': widget.user.uid,
-          'driverName': widget.user.displayName ?? 'Driver',
-          'status': 'accepted',
-          'pickupGeo': GeoPoint(
-            selectedRide['pickupLatLng'].latitude,
-            selectedRide['pickupLatLng'].longitude,
-          ),
-          'dropoffGeo': GeoPoint(
-            selectedRide['destinationLatLng'].latitude,
-            selectedRide['destinationLatLng'].longitude,
-          ),
-          'currentVehicleLocation': GeoPoint(
-            _driverCurrentLocation.latitude,
-            _driverCurrentLocation.longitude,
-          ),
-          'finalFareCharged': selectedRide['estimatedFare'],
-          'estimatedCost': selectedRide['estimatedFare'],
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true)),
-      );
-    }
-
     _rebuildMapElements();
-    _zoomToFitPoints(_driverCurrentLocation, selectedRide['pickupLatLng']);
-    _startNavigationSimulation(toPickup: true);
+    _zoomToFitPoints(_driverCurrentLocation, pickupLatLng);
+
+    // Also start the local trip simulation (route fetch + road points + marker
+    // movement). Construct a lightweight MockRideRequest and delegate to the
+    // existing simulation path so the "accept" action always results in the
+    // driver moving to pickup then continuing to dropoff.
+    try {
+      final mock = MockRideRequest(
+        id: selectedRide['id']?.toString() ?? activeRideDocId ?? '',
+        riderName: selectedRide['riderName']?.toString() ??
+            (widget.user.displayName ?? 'Passenger'),
+        createdAt: selectedRide['createdAt'] is DateTime
+            ? selectedRide['createdAt'] as DateTime?
+            : (selectedRide['createdAt'] is Timestamp
+                ? (selectedRide['createdAt'] as Timestamp).toDate()
+                : null),
+        pickupName: selectedRide['pickupName']?.toString() ?? '',
+        destinationName: selectedRide['destinationName']?.toString() ?? '',
+        pickupCoords: pickupLatLng,
+        destinationCoords: destinationLatLng,
+        estimatedFare: (selectedRide['estimatedFare'] is num)
+            ? (selectedRide['estimatedFare'] as num).toDouble()
+            : 0.0,
+      );
+
+      unawaited(_startLocalDriverTripSimulation(mock));
+    } catch (e) {
+      debugPrint('Failed to start local trip simulation after accept: $e');
+    }
   }
 
-  void _startNavigationSimulation({required bool toPickup}) {
-    _simulationTimer?.cancel();
-    _transitProgress = 0.0;
-    final startingEtaMinutes = _etaMinutes <= 0 ? 5 : _etaMinutes;
+  void _startDriverRoadSimulationIfReady() {
+    // Start the periodic simulation that walks the decoded route points and
+    // updates location, progress, fare and earnings. Only start when we have
+    // route points and we are at the pickup stage (arrivedAtPickup) or already
+    // in passengerInTransit.
+    if (_driverSimulationTimer != null) return;
+    if (_driverActualRoadPoints.isEmpty) return;
+    if (!mounted) return;
+    if (!(_currentDriverState == DriverRideState.arrivedAtPickup ||
+        _currentDriverState == DriverRideState.passengerInTransit)) return;
 
-    LatLng startPosition = _driverCurrentLocation;
-    LatLng targetPosition = toPickup
-        ? _activeRideData!['pickupLatLng']
-        : _activeRideData!['destinationLatLng'];
+    double calculateDistance(LatLng p1, LatLng p2) {
+      const p = 0.017453292519943295;
+      final a = 0.5 -
+          math.cos((p2.latitude - p1.latitude) * p) / 2 +
+          math.cos(p1.latitude * p) *
+              math.cos(p2.latitude * p) *
+              (1 - math.cos((p2.longitude - p1.longitude) * p)) /
+              2;
+      return 12742 * math.asin(math.sqrt(a));
+    }
 
-    _simulationTimer =
-        Timer.periodic(const Duration(milliseconds: 150), (timer) {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
+    setState(() {
+      _currentDriverState = DriverRideState.passengerInTransit;
+      // Ensure index starts at zero if not set
+      _driverWaypointIndex =
+          _driverWaypointIndex.clamp(0, _driverActualRoadPoints.length);
+    });
 
-      setState(() {
-        _transitProgress += 0.025;
-        if (_transitProgress >= 1.0) {
+    _driverSimulationTimer?.cancel();
+    _driverSimulationTimer = null;
+    _driverSimulationTimer = Timer.periodic(
+      const Duration(milliseconds: 400),
+      (timer) {
+        if (!mounted) {
           timer.cancel();
-          _driverCurrentLocation = targetPosition;
-
-          if (toPickup) {
-            _currentDriverState = DriverRideState.arrivedAtPickup;
-            _etaMinutes = 0;
-          } else {
-            _currentDriverState = DriverRideState.tripCompleted;
-            _etaMinutes = 0;
-          }
-        } else {
-          _driverCurrentLocation = _interpolatePoints(
-              startPosition, targetPosition, _transitProgress);
-          _etaMinutes = ((1.0 - _transitProgress) * startingEtaMinutes)
-              .ceil()
-              .clamp(0, startingEtaMinutes);
+          _driverSimulationTimer = null;
+          return;
         }
 
-        _rebuildMapElements();
-        _mapController
-            ?.animateCamera(CameraUpdate.newLatLng(_driverCurrentLocation));
-      });
-    });
+        if (_driverWaypointIndex >= _driverActualRoadPoints.length) {
+          timer.cancel();
+          setState(() {
+            _isTripActive = false;
+            _isAwaitingPayment = true;
+            _paymentReceived = false;
+            _isProcessingPaymentPush = false;
+            _currentDriverState = DriverRideState.tripCompleted;
+          });
+          _driverSimulationTimer = null;
+          return;
+        }
+
+        final currentPos = _driverActualRoadPoints[_driverWaypointIndex];
+
+        setState(() {
+          // move the live vehicle marker
+          _driverCurrentLocation = currentPos;
+
+          // update fares and earnings
+          final fareResult =
+              computeFareAndEarnings(_driverTraveledDistanceKm, 0.0);
+          _passengerLiveFareKsh = fareResult.passengerFare;
+          _driverLiveEarningsKsh = fareResult.driverEarnings;
+
+          _driverWaypointIndex++;
+        });
+
+        _mapController?.animateCamera(
+          CameraUpdate.newLatLng(
+            _driverActualRoadPoints[(_driverWaypointIndex - 1)
+                .clamp(0, _driverActualRoadPoints.length - 1)],
+          ),
+        );
+      },
+    );
   }
 
   void _startPassengerTransitTrip() {
@@ -856,6 +958,9 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
 
   Future<void> _startLocalDriverTripSimulation(
       MockRideRequest selectedRequest) async {
+    _driverSimulationTimer?.cancel();
+    _simulationTimer?.cancel();
+
     setState(() {
       _activeRequest = selectedRequest;
       _activeRideData = {
@@ -874,11 +979,36 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       _driverTraveledDistanceKm = 0.0;
       _driverLiveEarningsKsh = 0.0;
       _passengerLiveFareKsh = 100.0;
+      _isAwaitingPayment = false;
+      _paymentReceived = false;
+      _isProcessingPaymentPush = false;
     });
 
     final pickupLatLng = selectedRequest.pickupCoords;
-    final destinationLatLng = selectedRequest.destinationCoords;
+    final pickupRoute = await _fetchRoutePoints(
+      _driverCurrentLocation,
+      pickupLatLng,
+    );
 
+    if (!mounted) return;
+
+    setState(() {
+      _driverActualRoadPoints = pickupRoute.isNotEmpty
+          ? pickupRoute
+          : <LatLng>[_driverCurrentLocation, pickupLatLng];
+      _driverWaypointIndex = 0;
+      _currentDriverState = DriverRideState.navigatingToPickup;
+    });
+
+    _rebuildMapElements();
+    _zoomToFitPoints(_driverCurrentLocation, pickupLatLng);
+    _startNavigationSimulation(toPickup: true);
+  }
+
+  Future<List<LatLng>> _fetchRoutePoints(
+    LatLng origin,
+    LatLng destination,
+  ) async {
     try {
       const url = 'https://routes.googleapis.com/directions/v2:computeRoutes';
 
@@ -894,16 +1024,16 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
           'origin': {
             'location': {
               'latLng': {
-                'latitude': pickupLatLng.latitude,
-                'longitude': pickupLatLng.longitude,
+                'latitude': origin.latitude,
+                'longitude': origin.longitude,
               }
             }
           },
           'destination': {
             'location': {
               'latLng': {
-                'latitude': destinationLatLng.latitude,
-                'longitude': destinationLatLng.longitude,
+                'latitude': destination.latitude,
+                'longitude': destination.longitude,
               }
             }
           },
@@ -914,45 +1044,17 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final routes = data['routes'] as List<dynamic>?;
-
-      if (routes == null || routes.isEmpty) {
-        debugPrint(
-            'Driver phase routing aborted: No routes returned. Response: ${response.body}');
-        return;
-      }
+      if (routes == null || routes.isEmpty) return <LatLng>[];
 
       final route = routes[0] as Map<String, dynamic>;
       final polylineData = route['polyline'] as Map<String, dynamic>?;
       final encodedPolyline = polylineData?['encodedPolyline']?.toString();
-
-      if (encodedPolyline == null || encodedPolyline.isEmpty) {
-        debugPrint(
-            'Driver phase routing aborted: No polyline points available.');
-        return;
-      }
+      if (encodedPolyline == null || encodedPolyline.isEmpty) return <LatLng>[];
 
       final decodedPoints = PolylinePoints.decodePolyline(encodedPolyline);
       final roadPoints = decodedPoints
           .map((point) => LatLng(point.latitude, point.longitude))
           .toList();
-
-      double calculateDistance(LatLng p1, LatLng p2) {
-        const p = 0.017453292519943295;
-        final a = 0.5 -
-            math.cos((p2.latitude - p1.latitude) * p) / 2 +
-            math.cos(p1.latitude * p) *
-                math.cos(p2.latitude * p) *
-                (1 - math.cos((p2.longitude - p1.longitude) * p)) /
-                2;
-        return 12742 * math.asin(math.sqrt(a));
-      }
-
-      if (!mounted) return;
-
-      setState(() {
-        _driverActualRoadPoints = roadPoints;
-        _currentDriverState = DriverRideState.passengerInTransit;
-      });
 
       final durationString = route['duration'] as String?;
       if (durationString != null && durationString.endsWith('s')) {
@@ -964,52 +1066,110 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
         }
       }
 
-      _driverSimulationTimer?.cancel();
-      _driverSimulationTimer = Timer.periodic(
-        const Duration(milliseconds: 400),
-        (timer) {
-          if (_driverWaypointIndex >= _driverActualRoadPoints.length) {
-            timer.cancel();
-            setState(() {
-              _isTripActive = false;
-              _isAwaitingPayment = true;
-              _paymentReceived = false;
-              _isProcessingPaymentPush = false;
-            });
-            return;
-          }
+      return roadPoints;
+    } catch (e) {
+      debugPrint('Route fetch failed: $e');
+      return <LatLng>[];
+    }
+  }
 
-          final currentPos = _driverActualRoadPoints[_driverWaypointIndex];
+  void _startNavigationSimulation({required bool toPickup}) {
+    _simulationTimer?.cancel();
+    _simulationTimer = null;
+    _driverSimulationTimer?.cancel();
+    _driverSimulationTimer = null;
 
+    final routePoints = List<LatLng>.from(_driverActualRoadPoints);
+    if (routePoints.isEmpty) return;
+
+    setState(() {
+      _driverWaypointIndex = 0;
+      _currentDriverState = toPickup
+          ? DriverRideState.navigatingToPickup
+          : DriverRideState.passengerInTransit;
+    });
+
+    _simulationTimer =
+        Timer.periodic(const Duration(milliseconds: 150), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      if (_driverWaypointIndex >= routePoints.length) {
+        timer.cancel();
+        _simulationTimer = null;
+        if (toPickup) {
           setState(() {
-            if (_driverWaypointIndex > 0) {
-              final previousPos =
-                  _driverActualRoadPoints[_driverWaypointIndex - 1];
-              final segment = calculateDistance(previousPos, currentPos);
-              // Ignore very small noisy movements
-              if (segment >= kSegmentThresholdKm) {
-                _driverTraveledDistanceKm += segment;
-              }
-            }
-
-            // Compute fares using centralized helper (MVP constants)
-            final fareResult =
-                computeFareAndEarnings(_driverTraveledDistanceKm, 0.0);
-            _passengerLiveFareKsh = fareResult.passengerFare;
-            _driverLiveEarningsKsh = fareResult.driverEarnings;
-            _driverWaypointIndex++;
+            _currentDriverState = DriverRideState.arrivedAtPickup;
+            _etaMinutes = 0;
           });
 
-          _mapController?.animateCamera(
-            CameraUpdate.newLatLng(
-              _driverActualRoadPoints[_driverWaypointIndex - 1],
-            ),
-          );
-        },
+          final destinationLatLng = _activeRideData?['destinationLatLng'];
+          if (destinationLatLng is LatLng) {
+            final dropoffRoute = await _fetchRoutePoints(
+              _driverCurrentLocation,
+              destinationLatLng,
+            );
+
+            if (!mounted) return;
+
+            setState(() {
+              _driverActualRoadPoints = dropoffRoute.isNotEmpty
+                  ? dropoffRoute
+                  : <LatLng>[_driverCurrentLocation, destinationLatLng];
+              _driverWaypointIndex = 0;
+              _currentDriverState = DriverRideState.passengerInTransit;
+            });
+
+            _rebuildMapElements();
+            _startDriverRoadSimulationIfReady();
+          }
+        } else {
+          setState(() {
+            _isTripActive = false;
+            _isAwaitingPayment = true;
+            _paymentReceived = false;
+            _isProcessingPaymentPush = false;
+            _currentDriverState = DriverRideState.tripCompleted;
+          });
+          _simulationTimer = null;
+        }
+        return;
+      }
+
+      final currentPos = routePoints[_driverWaypointIndex];
+
+      setState(() {
+        if (_driverWaypointIndex > 0) {
+          final previousPos = routePoints[_driverWaypointIndex - 1];
+          final segment = Geolocator.distanceBetween(
+                previousPos.latitude,
+                previousPos.longitude,
+                currentPos.latitude,
+                currentPos.longitude,
+              ) /
+              1000.0;
+          if (segment >= kSegmentThresholdKm) {
+            _driverTraveledDistanceKm += segment;
+          }
+        }
+
+        _driverCurrentLocation = currentPos;
+
+        final fareResult =
+            computeFareAndEarnings(_driverTraveledDistanceKm, 0.0);
+        _passengerLiveFareKsh = fareResult.passengerFare;
+        _driverLiveEarningsKsh = fareResult.driverEarnings;
+
+        _driverWaypointIndex++;
+      });
+
+      _rebuildMapElements();
+      _mapController?.animateCamera(
+        CameraUpdate.newLatLng(_driverCurrentLocation),
       );
-    } catch (e) {
-      debugPrint('Driver phase routing failed: $e');
-    }
+    });
   }
 
   Future<void> _finalizeTripToCloudDatabase() async {
@@ -1018,30 +1178,9 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       _currentDriverState = DriverRideState.tripCompleted;
     });
 
-    try {
-      final rideDocId = activeRideDocId;
-      if (rideDocId != null && rideDocId.isNotEmpty) {
-        await FirebaseFirestore.instance.collection('rides').doc(rideDocId).set(
-          {
-            'driverId': widget.user.uid,
-            'driverName': widget.user.displayName ?? 'AeroRide Partner',
-            'status': 'completed',
-            'distanceKm':
-                double.parse(_driverTraveledDistanceKm.toStringAsFixed(2)),
-            'finalFareCharged': _passengerLiveFareKsh.round(),
-            'estimatedCost': _passengerLiveFareKsh.round(),
-            'driverEarningsLog': _driverLiveEarningsKsh.round(),
-            'driverEarnings': _driverLiveEarningsKsh.round(),
-            'completedAt': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-      }
-
-      debugPrint('Trip logged to cloud history ledger.');
-    } catch (e) {
-      debugPrint('Failed logging history record: $e');
-    }
+    debugPrint(
+      'Trip completed locally: distance=${_driverTraveledDistanceKm.toStringAsFixed(2)}km fare=${_passengerLiveFareKsh.round()} earnings=${_driverLiveEarningsKsh.round()}',
+    );
   }
 
   void _resetDriverDashboard() {
@@ -1053,6 +1192,9 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       _mapMarkers.clear();
     });
     _determineDriverGPSLocation();
+    if (_isOnline) {
+      _autoTriggerIncomingRideSearch();
+    }
   }
 
   LatLng _interpolatePoints(LatLng start, LatLng end, double fraction) {
@@ -1092,10 +1234,14 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
             title: "Dropoff: ${_activeRideData!['destinationName']}"),
       ));
 
-      List<LatLng> points =
-          (_currentDriverState == DriverRideState.navigatingToPickup)
-              ? [_driverCurrentLocation, pickup]
-              : [pickup, destination];
+      List<LatLng> points;
+      if ((_currentDriverState == DriverRideState.navigatingToPickup ||
+              _currentDriverState == DriverRideState.passengerInTransit) &&
+          _driverActualRoadPoints.isNotEmpty) {
+        points = _driverActualRoadPoints;
+      } else {
+        points = [pickup, destination];
+      }
 
       _mapPolylines.add(Polyline(
         polylineId: const PolylineId('driver_route_line'),
@@ -1130,76 +1276,63 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   }
 
   Widget _buildRealtimeRideMapLayer() {
-    if (activeRideDocId == null) {
+    if (activeRideDocId == null || _activeRideData == null) {
       return const Center(
         child: Text('Waiting for incoming ride matching requests...'),
       );
     }
 
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('rides')
-          .doc(activeRideDocId)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData || !(snapshot.data?.exists ?? false)) {
-          return const Center(child: CircularProgressIndicator());
-        }
+    final rideData = _activeRideData!;
+    final pickupLatLng = rideData['pickupLatLng'] as LatLng?;
+    final destinationLatLng = rideData['destinationLatLng'] as LatLng?;
+    final vehicleGeoPoint = rideData['currentVehicleLocation'] as GeoPoint?;
 
-        final rideData = snapshot.data!.data()!;
-        final vehicleGeoPoint = rideData['currentVehicleLocation'] as GeoPoint?;
+    final currentCarLatLng = vehicleGeoPoint != null
+        ? LatLng(vehicleGeoPoint.latitude, vehicleGeoPoint.longitude)
+        : (_isTripActive &&
+                _driverActualRoadPoints.isNotEmpty &&
+                _driverWaypointIndex < _driverActualRoadPoints.length
+            ? _driverActualRoadPoints[_driverWaypointIndex]
+            : _driverCurrentLocation);
 
-        final currentCarLatLng = vehicleGeoPoint != null
-            ? LatLng(vehicleGeoPoint.latitude, vehicleGeoPoint.longitude)
-            : _driverCurrentLocation;
+    final Set<Marker> driverScreenMarkers = {
+      Marker(
+        markerId: const MarkerId('driver_self_marker'),
+        position: currentCarLatLng,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueYellow),
+        infoWindow: const InfoWindow(title: 'My Vehicle Location'),
+      ),
+    };
 
-        final Set<Marker> driverScreenMarkers = {
-          Marker(
-            markerId: const MarkerId('driver_self_marker'),
-            position: currentCarLatLng,
-            icon: BitmapDescriptor.defaultMarkerWithHue(
-                BitmapDescriptor.hueYellow),
-            infoWindow: const InfoWindow(title: 'My Vehicle Location'),
-          ),
-        };
+    if (pickupLatLng != null) {
+      driverScreenMarkers.add(
+        Marker(
+          markerId: const MarkerId('pickup_target'),
+          position: pickupLatLng,
+          icon:
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          infoWindow: const InfoWindow(title: 'Passenger Pickup'),
+        ),
+      );
+    }
 
-        final pickupGeo =
-            (rideData['pickupGeo'] ?? rideData['pickup']) as GeoPoint?;
-        if (pickupGeo != null) {
-          driverScreenMarkers.add(
-            Marker(
-              markerId: const MarkerId('pickup_target'),
-              position: LatLng(pickupGeo.latitude, pickupGeo.longitude),
-              icon: BitmapDescriptor.defaultMarkerWithHue(
-                  BitmapDescriptor.hueAzure),
-              infoWindow: const InfoWindow(title: 'Passenger Pickup'),
-            ),
-          );
-        }
+    if (destinationLatLng != null) {
+      driverScreenMarkers.add(
+        Marker(
+          markerId: const MarkerId('dropoff_target'),
+          position: destinationLatLng,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+          infoWindow: const InfoWindow(title: 'Destination'),
+        ),
+      );
+    }
 
-        final dropoffGeo =
-            (rideData['dropoffGeo'] ?? rideData['dropoff']) as GeoPoint?;
-        if (dropoffGeo != null) {
-          driverScreenMarkers.add(
-            Marker(
-              markerId: const MarkerId('dropoff_target'),
-              position: LatLng(dropoffGeo.latitude, dropoffGeo.longitude),
-              icon: BitmapDescriptor.defaultMarkerWithHue(
-                  BitmapDescriptor.hueRed),
-              infoWindow: const InfoWindow(title: 'Destination'),
-            ),
-          );
-        }
-
-        return GoogleMap(
-          initialCameraPosition:
-              CameraPosition(target: currentCarLatLng, zoom: 14),
-          onMapCreated: (controller) => _mapController = controller,
-          markers: driverScreenMarkers,
-          myLocationButtonEnabled: false,
-          zoomControlsEnabled: true,
-        );
-      },
+    return GoogleMap(
+      initialCameraPosition: CameraPosition(target: currentCarLatLng, zoom: 14),
+      onMapCreated: (controller) => _mapController = controller,
+      markers: driverScreenMarkers,
+      myLocationButtonEnabled: false,
+      zoomControlsEnabled: true,
     );
   }
 
@@ -1217,31 +1350,26 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
           infoWindow: const InfoWindow(title: "My Vehicle (Online)"),
         ),
       );
-    } else if (_isTripActive &&
-        _activeRequest != null &&
-        _driverActualRoadPoints.isNotEmpty) {
-      if (_driverWaypointIndex < _driverActualRoadPoints.length) {
-        driverScreenMarkers.addAll([
-          Marker(
-            markerId: const MarkerId("moving_driver_car"),
-            position: _driverActualRoadPoints[_driverWaypointIndex],
-            icon: BitmapDescriptor.defaultMarkerWithHue(
-                BitmapDescriptor.hueYellow),
-          ),
-          Marker(
-            markerId: const MarkerId("passenger_pickup_node"),
-            position: _activeRequest!.pickupCoords,
-            icon: BitmapDescriptor.defaultMarkerWithHue(
-                BitmapDescriptor.hueAzure),
-          ),
-          Marker(
-            markerId: const MarkerId("passenger_dropoff_node"),
-            position: _activeRequest!.destinationCoords,
-            icon:
-                BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-          ),
-        ]);
-      }
+    } else if (_isTripActive && _activeRequest != null) {
+      driverScreenMarkers.addAll([
+        Marker(
+          markerId: const MarkerId("moving_driver_car"),
+          position: _driverCurrentLocation,
+          icon:
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueYellow),
+        ),
+        Marker(
+          markerId: const MarkerId("passenger_pickup_node"),
+          position: _activeRequest!.pickupCoords,
+          icon:
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+        ),
+        Marker(
+          markerId: const MarkerId("passenger_dropoff_node"),
+          position: _activeRequest!.destinationCoords,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+        ),
+      ]);
     }
 
     // 2. RENDERING THE CHOSEN TAB CONTROLLER
@@ -1266,18 +1394,22 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                           target: _mockDriverCurrentLocation, zoom: 13.5),
                       onMapCreated: (GoogleMapController controller) =>
                           _mapController = controller,
-                      markers: driverScreenMarkers,
-                      polylines: _driverActualRoadPoints.isNotEmpty
-                          ? {
-                              Polyline(
-                                polylineId: const PolylineId(
-                                    "driver_local_road_polyline"),
-                                points: _driverActualRoadPoints,
-                                color: Colors.blueAccent,
-                                width: 5,
-                              )
-                            }
-                          : {},
+                      markers: _mapMarkers.isNotEmpty
+                          ? _mapMarkers
+                          : driverScreenMarkers,
+                      polylines: _mapPolylines.isNotEmpty
+                          ? _mapPolylines
+                          : (_driverActualRoadPoints.isNotEmpty
+                              ? {
+                                  Polyline(
+                                    polylineId: const PolylineId(
+                                        "driver_local_road_polyline"),
+                                    points: _driverActualRoadPoints,
+                                    color: Colors.blueAccent,
+                                    width: 5,
+                                  )
+                                }
+                              : {}),
                     ),
                   ],
                 ),

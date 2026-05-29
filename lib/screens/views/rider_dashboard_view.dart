@@ -136,7 +136,9 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
     if (_rideControllerListener != null) {
       _rideController.removeListener(_rideControllerListener!);
     }
-    _mapController?.dispose();
+    if (!kIsWeb) {
+      _mapController?.dispose();
+    }
     _pickupTextController.dispose();
     _destinationTextController.dispose();
     super.dispose();
@@ -583,8 +585,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
       setState(() {
         _actualRoadPoints = roadRoute;
-        _calculatedFareKsh =
-            (fare.passengerFare).clamp(200.0, 5000.0) as double;
+        _calculatedFareKsh = fare.passengerFare;
         _mapPolylines.clear();
         _mapPolylines.add(
           Polyline(
@@ -605,6 +606,21 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
   }
 
   Widget _buildSuggestedDestinationsSection() {
+    final suggestedDestinations = <Map<String, dynamic>>[
+      {
+        'name': 'Nakuru CBD',
+        'location': const GeoPoint(-0.2831, 36.0664),
+      },
+      {
+        'name': 'Milimani',
+        'location': const GeoPoint(-0.2745, 36.0752),
+      },
+      {
+        'name': 'London Estate',
+        'location': const GeoPoint(-0.2869, 36.0618),
+      },
+    ];
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -613,65 +629,42 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
           style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
         ),
         const SizedBox(height: 10),
-        StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('suggested_destinations')
-              .orderBy('popularity', descending: true)
-              .limit(3)
-              .snapshots(),
-          builder: (context, snapshot) {
-            if (!snapshot.hasData) {
-              return const Center(child: CircularProgressIndicator());
-            }
+        ListView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: suggestedDestinations.length,
+          itemBuilder: (context, index) {
+            final data = suggestedDestinations[index];
+            final GeoPoint geo = data['location'] as GeoPoint;
+            final String destinationName = data['name'].toString();
 
-            if (snapshot.data!.docs.isEmpty) {
-              return const Padding(
-                padding: EdgeInsets.symmetric(vertical: 8),
-                child: Text('No nearby suggestions found.'),
-              );
-            }
+            return ListTile(
+              onTap: () async {
+                final origin = _riderLocation ??
+                    _rideController.riderLocation ??
+                    const LatLng(-0.2831, 36.0664);
+                final dest = LatLng(geo.latitude, geo.longitude);
 
-            return ListView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: snapshot.data!.docs.length,
-              itemBuilder: (context, index) {
-                final doc = snapshot.data!.docs[index];
-                final data = doc.data() as Map<String, dynamic>;
-                final GeoPoint geo = data['location'] as GeoPoint;
-                final String destinationName =
-                    (data['name'] ?? 'Suggested destination').toString();
+                setState(() {
+                  _destinationLocation = dest;
+                  _destinationAddressString = destinationName;
+                  _destinationTextController.text = destinationName;
+                  _currentRideState = RideState.driverSelection;
+                });
 
-                return ListTile(
-                  onTap: () async {
-                    final origin = _riderLocation ??
-                        _rideController.riderLocation ??
-                        const LatLng(-0.2831, 36.0664);
-                    final dest = LatLng(geo.latitude, geo.longitude);
-
-                    setState(() {
-                      _destinationLocation = dest;
-                      _destinationAddressString = destinationName;
-                      _destinationTextController.text = destinationName;
-                      _currentRideState = RideState.driverSelection;
-                    });
-
-                    await _loadNearbyDrivers(origin);
-                    await _calculateRouteAndPricing(origin, dest);
-                  },
-                  leading: const CircleAvatar(
-                    backgroundColor: Colors.black12,
-                    child: Icon(Icons.location_on,
-                        color: Colors.black87, size: 18),
-                  ),
-                  title: Text(
-                    destinationName,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 14),
-                  ),
-                  trailing: const Icon(Icons.arrow_forward_ios, size: 14),
-                );
+                await _loadNearbyDrivers(origin);
+                await _calculateRouteAndPricing(origin, dest);
               },
+              leading: const CircleAvatar(
+                backgroundColor: Colors.black12,
+                child: Icon(Icons.location_on, color: Colors.black87, size: 18),
+              ),
+              title: Text(
+                destinationName,
+                style:
+                    const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+              trailing: const Icon(Icons.arrow_forward_ios, size: 14),
             );
           },
         ),
@@ -709,21 +702,34 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       _etaMinutes = driver['eta'];
     });
 
+    final fareToSave = _calculatedFareKsh > 0
+        ? _calculatedFareKsh
+        : computeFareAndEarnings(
+            _calculateHaversineDistance(_riderLocation!, _destinationLocation!),
+            0.0,
+          ).passengerFare;
+
     final rideRequestRef =
         FirebaseFirestore.instance.collection('ride_requests').doc();
     _currentRideDocumentId = rideRequestRef.id;
     rideRequestRef.set({
       'id': rideRequestRef.id,
+      'userId': widget.user.uid,
       'riderId': widget.user.uid,
       'riderName': widget.user.displayName ?? 'AeroRide User',
       'pickup': GeoPoint(_riderLocation!.latitude, _riderLocation!.longitude),
+      'pickupLocation':
+          GeoPoint(_riderLocation!.latitude, _riderLocation!.longitude),
       'dropoff': GeoPoint(
+          _destinationLocation!.latitude, _destinationLocation!.longitude),
+      'destinationLocation': GeoPoint(
           _destinationLocation!.latitude, _destinationLocation!.longitude),
       'pickupAddress': _pickupAddressString,
       'destinationName': _destinationAddressString,
+      'destinationAddress': _destinationAddressString,
       'status': 'searching',
-      'estimatedCost': _calculatedFareKsh,
-      'finalFareCharged': _calculatedFareKsh,
+      'estimatedCost': fareToSave,
+      'finalFareCharged': fareToSave,
       'createdAt': FieldValue.serverTimestamp(),
     });
 
@@ -731,8 +737,6 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       'id': rideRequestRef.id,
       'riderId': widget.user.uid,
       'riderName': widget.user.displayName ?? 'AeroRide User',
-      'driverName': driver['name'],
-      'driverId': driver['id'] ?? 'driver_demo',
       'pickup': GeoPoint(_riderLocation!.latitude, _riderLocation!.longitude),
       'pickupGeo':
           GeoPoint(_riderLocation!.latitude, _riderLocation!.longitude),
@@ -742,20 +746,18 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
           _destinationLocation!.latitude, _destinationLocation!.longitude),
       'currentVehicleLocation':
           GeoPoint(_driverLocation!.latitude, _driverLocation!.longitude),
-      'finalFareCharged': _calculatedFareKsh,
-      'estimatedCost': _calculatedFareKsh,
+      'finalFareCharged': fareToSave,
+      'estimatedCost': fareToSave,
       'driverEarnings': 0,
       'pickupAddress': _pickupAddressString,
       'destinationName': _destinationAddressString,
-      'status': 'accepted',
+      'status': 'searching',
+      'driverId': null,
       'createdAt': FieldValue.serverTimestamp(),
     });
 
     Timer(const Duration(seconds: 2), () async {
       if (!mounted) return;
-      rideRequestRef
-          .update({'status': 'accepted', 'driverName': driver['name']});
-
       setState(() {
         _currentRideState = RideState.driverEnRoute;
       });

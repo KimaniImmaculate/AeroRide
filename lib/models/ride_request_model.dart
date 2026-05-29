@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 class RideRequest {
   final String? id;
   final String userId;
+  final String? riderName;
   final String? driverId;
   final List<String>? candidateDrivers;
   final GeoPoint pickupLocation;
@@ -18,6 +19,7 @@ class RideRequest {
   RideRequest({
     this.id,
     required this.userId,
+    this.riderName,
     this.driverId,
     this.candidateDrivers,
     required this.pickupLocation,
@@ -35,18 +37,25 @@ class RideRequest {
     final fareValue = (map['finalFareCharged'] ?? map['estimatedCost']) as num?;
     return RideRequest(
       id: docId,
-      userId: map['userId'] ?? '',
+      userId: map['userId'] ?? map['riderId'] ?? '',
+      riderName: map['riderName'] ??
+          map['userName'] ??
+          map['passengerName'] ??
+          map['name'],
       driverId: map['driverId'],
       candidateDrivers: map['candidateDrivers'] != null
           ? List<String>.from(map['candidateDrivers'])
           : null,
-      pickupLocation: map['pickupLocation'] as GeoPoint,
-      destinationLocation: map['destinationLocation'] as GeoPoint,
-      pickupAddress: map['pickupAddress'] ?? '',
-      destinationAddress: map['destinationAddress'] ?? '',
+      pickupLocation: (map['pickupLocation'] ?? map['pickup']) as GeoPoint,
+      destinationLocation:
+          (map['destinationLocation'] ?? map['dropoff']) as GeoPoint,
+      pickupAddress: map['pickupAddress'] ?? map['pickupName'] ?? '',
+      destinationAddress:
+          map['destinationAddress'] ?? map['destinationName'] ?? '',
       status: map['status'] ?? 'searching',
       estimatedCost: fareValue?.toDouble() ?? 0.0,
-      createdAt: (map['createdAt'] as Timestamp?)?.toDate(),
+      createdAt: (map['createdAt'] as Timestamp?)?.toDate() ??
+          (map['updatedAt'] as Timestamp?)?.toDate(),
       updatedAt: (map['updatedAt'] as Timestamp?)?.toDate(),
       rideType: map['rideType'] ?? 'standard',
     );
@@ -55,6 +64,7 @@ class RideRequest {
   Map<String, dynamic> toMap() {
     return {
       'userId': userId,
+      if (riderName != null) 'riderName': riderName,
       'driverId': driverId,
       'candidateDrivers': candidateDrivers,
       'pickupLocation': pickupLocation,

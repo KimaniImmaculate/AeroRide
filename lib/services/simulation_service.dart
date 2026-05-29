@@ -101,18 +101,23 @@ class SimulationService {
         base.longitude + (rnd.nextDouble() - 0.5) * 0.02,
       );
 
-      await _db.collection('rides').add({
-        'userId': 'sim-user-$i',
-        'driverId': null,
-        'candidateDrivers': [driverUid],
-        'pickupLocation': GeoPoint(pickup.latitude, pickup.longitude),
-        'destinationLocation': GeoPoint(dest.latitude, dest.longitude),
-        'pickupAddress': 'Sim Pickup $i',
-        'destinationAddress': 'Sim Drop $i',
-        'status': 'searching',
-        'estimatedCost': estimatedCost,
-        'finalFareCharged': estimatedCost,
-      });
+      try {
+        await _db.collection('rides').add({
+          'userId': 'sim-user-$i',
+          'driverId': null,
+          'candidateDrivers': [driverUid],
+          'pickupLocation': GeoPoint(pickup.latitude, pickup.longitude),
+          'destinationLocation': GeoPoint(dest.latitude, dest.longitude),
+          'pickupAddress': 'Sim Pickup $i',
+          'destinationAddress': 'Sim Drop $i',
+          'status': 'searching',
+          'estimatedCost': estimatedCost,
+          'finalFareCharged': estimatedCost,
+        });
+      } catch (e) {
+        debugPrint(
+            'SimulationService: Ignored write when creating mock ride: $e');
+      }
     }
   }
 

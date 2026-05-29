@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -154,14 +155,28 @@ class FirestoreService {
   }
 
   Stream<List<RideRequest>> watchOpenRideRequests({int limit = 50}) {
-    return _db
-        .collection('rides')
-        .where('status', isEqualTo: 'searching')
-        .limit(limit)
-        .snapshots()
-        .map(
-      (snapshot) {
+    final cutoff = DateTime.now().subtract(const Duration(days: 3));
+    Stream<List<RideRequest>> openRidesForCollection(String collectionName) {
+      return _db
+          .collection(collectionName)
+          .where('status', isEqualTo: 'searching')
+          .limit(limit)
+          .snapshots()
+          .map((snapshot) {
         final rides = snapshot.docs
+            .where((doc) {
+              if (doc.metadata.hasPendingWrites) {
+                return true;
+              }
+              final data = doc.data();
+              final createdAt = data['createdAt'] as Timestamp?;
+              final updatedAt = data['updatedAt'] as Timestamp?;
+              final recordTime = createdAt ?? updatedAt;
+              if (recordTime == null) {
+                return false;
+              }
+              return recordTime.toDate().isAfter(cutoff);
+            })
             .map((doc) => RideRequest.fromMap(doc.data(), doc.id))
             .toList();
         rides.sort((a, b) {
@@ -170,8 +185,77 @@ class FirestoreService {
           return bTime.compareTo(aTime);
         });
         return rides.take(limit).toList();
-      },
-    );
+      });
+    }
+
+    return Stream.multi((controller) {
+      final activeRides = <String, RideRequest>{};
+      StreamSubscription<List<RideRequest>>? ridesSub;
+      StreamSubscription<List<RideRequest>>? requestsSub;
+
+      void emitMerged() {
+        final merged = activeRides.values.toList()
+          ..sort((a, b) {
+            final aTime = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final bTime = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            return bTime.compareTo(aTime);
+          });
+        controller.add(merged.take(limit).toList());
+      }
+
+      ridesSub = openRidesForCollection('rides').listen((rides) {
+        for (final ride in rides) {
+          activeRides['rides:${ride.id ?? ride.userId}'] = ride;
+        }
+        emitMerged();
+      }, onError: controller.addError);
+
+      requestsSub = openRidesForCollection('ride_requests').listen((rides) {
+        for (final ride in rides) {
+          activeRides['ride_requests:${ride.id ?? ride.userId}'] = ride;
+        }
+        emitMerged();
+      }, onError: controller.addError);
+
+      controller.onCancel = () async {
+        await ridesSub?.cancel();
+        await requestsSub?.cancel();
+      };
+    });
+  }
+
+  // Simple: watch a single collection for recent ride requests.
+  // Useful for MVP: drivers can subscribe directly to `ride_requests`.
+  Stream<List<RideRequest>> watchSimpleOpenRides({
+    String collectionName = 'ride_requests',
+    int limit = 50,
+  }) {
+    final cutoff = DateTime.now().subtract(const Duration(days: 3));
+
+    return _db
+        .collection(collectionName)
+        .limit(limit)
+        .snapshots()
+        .map((snapshot) {
+      final rides = snapshot.docs
+          .where((doc) {
+            if (doc.metadata.hasPendingWrites) return true;
+            final data = doc.data();
+            final createdAt = data['createdAt'] as Timestamp?;
+            final updatedAt = data['updatedAt'] as Timestamp?;
+            final recordTime = createdAt ?? updatedAt;
+            if (recordTime == null) return false;
+            return recordTime.toDate().isAfter(cutoff);
+          })
+          .map((doc) => RideRequest.fromMap(doc.data(), doc.id))
+          .toList();
+      rides.sort((a, b) {
+        final aTime = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bTime = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return bTime.compareTo(aTime);
+      });
+      return rides.take(limit).toList();
+    });
   }
 
   Stream<List<RideRequest>> watchActiveDriverRides(String driverId) {

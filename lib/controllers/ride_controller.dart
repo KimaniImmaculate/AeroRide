@@ -71,6 +71,7 @@ class RideController extends ChangeNotifier {
   // Core Flow: Triggers a new ride down to Firestore and maps it
   Future<void> requestNewRide({
     required String userId,
+    required String riderName,
     required LatLng pickup,
     required LatLng destination,
     required String pickupText,
@@ -97,6 +98,7 @@ class RideController extends ChangeNotifier {
 
       final newRide = RideRequest(
         userId: userId,
+        riderName: riderName,
         pickupLocation: pickup.toGeoPoint(),
         destinationLocation: destination.toGeoPoint(),
         pickupAddress: pickupText,
@@ -123,17 +125,6 @@ class RideController extends ChangeNotifier {
           newRide.candidateDrivers != null &&
           newRide.candidateDrivers!.isNotEmpty) {
         _autoAssignDriver(rideId, newRide.candidateDrivers!);
-      }
-
-      if ((candidateDriverIds == null || candidateDriverIds.isEmpty) &&
-          !simulationMode) {
-        unawaited(
-          _populateNearbyDriversForRide(
-            rideId: rideId,
-            pickup: pickup,
-            limit: candidateTargetCount,
-          ),
-        );
       }
 
       // Instantly stream updates

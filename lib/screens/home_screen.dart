@@ -188,8 +188,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           _pickup == null
                               ? "Tap the map to set Pickup location"
                               : _destination == null
-                              ? "Tap the map to set Destination"
-                              : "Ready to request ride",
+                                  ? "Tap the map to set Destination"
+                                  : "Ready to request ride",
                           style: const TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 16,
@@ -236,6 +236,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               ? () {
                                   _rideController.requestNewRide(
                                     userId: widget.user.uid,
+                                    riderName: widget.user.displayName ??
+                                        'AeroRide User',
                                     pickup: _pickup!,
                                     destination: _destination!,
                                     pickupText: "Custom Pickup",
@@ -255,8 +257,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 _rideController.currentRideStatus ==
                                     'SEARCHING') &&
                             _rideController
-                                .nearbyDriverPreviews
-                                .isNotEmpty) ...[
+                                .nearbyDriverPreviews.isNotEmpty) ...[
                           const SizedBox(height: 8),
                           SizedBox(
                             height: 120,
@@ -275,8 +276,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                     : (driverId ?? 'Driver');
                                 final phone =
                                     raw != null && raw['phone'] != null
-                                    ? raw['phone'] as String
-                                    : null;
+                                        ? raw['phone'] as String
+                                        : null;
 
                                 return Padding(
                                   padding: const EdgeInsets.only(right: 12.0),
@@ -345,8 +346,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                               ),
                                             const Spacer(),
                                             ElevatedButton(
-                                              onPressed:
-                                                  _rideController
+                                              onPressed: _rideController
                                                           .activeRideId ==
                                                       null
                                                   ? null
@@ -358,8 +358,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                                       }
                                                       final messenger =
                                                           ScaffoldMessenger.of(
-                                                            context,
-                                                          );
+                                                        context,
+                                                      );
                                                       try {
                                                         final fs =
                                                             FirestoreService();

@@ -11,7 +11,10 @@ service cloud.firestore {
     }
 
     function isRideRider(data) {
-      return signedIn() && data.userId == request.auth.uid;
+      return signedIn() && (
+        data.userId == request.auth.uid ||
+        data.riderId == request.auth.uid
+      );
     }
 
     function isRideDriver(data) {
@@ -79,6 +82,34 @@ service cloud.firestore {
         );
 
       // Prevent deletions from clients
+      allow delete: if false;
+    }
+
+    match /ride_requests/{rideId} {
+      // MVP: allow signed-in users to read ride request docs so the driver feed
+      // can query `ride_requests` without a status constraint.
+      allow read: if signedIn();
+
+      allow create: if signedIn()
+        && (
+          request.resource.data.userId == request.auth.uid ||
+          request.resource.data.riderId == request.auth.uid
+        )
+        && request.resource.data.status == 'searching'
+        && request.resource.data.driverId == null;
+
+      allow update: if signedIn()
+        && (
+          isRideParticipant(resource.data) ||
+          isCandidateDriverRide(resource.data) ||
+          (resource.data.status == 'searching' && request.resource.data.status == 'accepted' && request.resource.data.driverId == request.auth.uid)
+        )
+        && isValidStatusTransition(resource.data.status, request.resource.data.status)
+        && (
+          (isRideRider(resource.data) && request.resource.data.status == 'cancelled') ||
+          (request.resource.data.driverId == request.auth.uid)
+        );
+
       allow delete: if false;
     }
 
