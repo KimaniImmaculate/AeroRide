@@ -8,6 +8,7 @@ class RideRequest {
   final List<String>? candidateDrivers;
   final GeoPoint pickupLocation;
   final GeoPoint destinationLocation;
+  final GeoPoint? currentVehicleLocation;
   final String pickupAddress;
   final String destinationAddress;
   final String status;
@@ -24,6 +25,7 @@ class RideRequest {
     this.candidateDrivers,
     required this.pickupLocation,
     required this.destinationLocation,
+    this.currentVehicleLocation,
     required this.pickupAddress,
     required this.destinationAddress,
     required this.status,
@@ -49,6 +51,8 @@ class RideRequest {
       pickupLocation: (map['pickupLocation'] ?? map['pickup']) as GeoPoint,
       destinationLocation:
           (map['destinationLocation'] ?? map['dropoff']) as GeoPoint,
+      currentVehicleLocation: (map['currentVehicleLocation'] ??
+          map['current_vehicle_location']) as GeoPoint?,
       pickupAddress: map['pickupAddress'] ?? map['pickupName'] ?? '',
       destinationAddress:
           map['destinationAddress'] ?? map['destinationName'] ?? '',
@@ -69,6 +73,8 @@ class RideRequest {
       'candidateDrivers': candidateDrivers,
       'pickupLocation': pickupLocation,
       'destinationLocation': destinationLocation,
+      if (currentVehicleLocation != null)
+        'currentVehicleLocation': currentVehicleLocation,
       'pickupAddress': pickupAddress,
       'destinationAddress': destinationAddress,
       'status': status,

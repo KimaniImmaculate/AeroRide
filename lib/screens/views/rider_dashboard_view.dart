@@ -20,6 +20,7 @@ import '../../models/ride_type_model.dart';
 import '../../models/user_model.dart';
 import '../../services/firestore_service.dart';
 import '../../services/drivers_service.dart';
+import '../../services/mock_route_service.dart';
 import '../../theme/aeroride_theme.dart';
 import '../../utils/currency.dart';
 import '../../utils/browser_geolocation.dart';
@@ -816,6 +817,11 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       if (routes == null || routes.isEmpty) {
         debugPrint(
             'Phase routing aborted: No routes returned. Response: ${response.body}');
+        _actualRoadPoints = MockRouteService.buildRoutePoints(
+          origin,
+          destination,
+          steps: 18,
+        );
         return;
       }
 
@@ -826,6 +832,11 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
       if (encodedPolyline == null || encodedPolyline.isEmpty) {
         debugPrint('Phase routing aborted: No polyline points available.');
+        _actualRoadPoints = MockRouteService.buildRoutePoints(
+          origin,
+          destination,
+          steps: 18,
+        );
         return;
       }
 
@@ -855,6 +866,11 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       _zoomToFitRoute(origin, destination);
     } catch (e) {
       debugPrint('Phase routing failed: $e');
+      _actualRoadPoints = MockRouteService.buildRoutePoints(
+        origin,
+        destination,
+        steps: 18,
+      );
     }
   }
 

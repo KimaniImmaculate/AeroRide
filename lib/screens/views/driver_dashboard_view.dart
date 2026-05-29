@@ -925,12 +925,24 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
         }
 
         final currentPos = _driverActualRoadPoints[_driverWaypointIndex];
+        final previousPos = _driverWaypointIndex > 0
+            ? _driverActualRoadPoints[_driverWaypointIndex - 1]
+            : _driverCurrentLocation;
+        final segmentMeters = Geolocator.distanceBetween(
+          previousPos.latitude,
+          previousPos.longitude,
+          currentPos.latitude,
+          currentPos.longitude,
+        );
+        final segmentKm = segmentMeters / 1000.0;
 
         setState(() {
           // move the live vehicle marker
           _driverCurrentLocation = currentPos;
 
-          // update fares and earnings
+          // accumulate trip distance, then update fares and earnings using the
+          // pricing calculator so fare rises as the journey progresses.
+          _driverTraveledDistanceKm += segmentKm;
           final fareResult =
               computeFareAndEarnings(_driverTraveledDistanceKm, 0.0);
           _passengerLiveFareKsh = fareResult.passengerFare;
@@ -938,6 +950,9 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
 
           _driverWaypointIndex++;
         });
+
+        // Refresh marker collection so the map receives the new vehicle point.
+        _rebuildMapElements();
 
         _mapController?.animateCamera(
           CameraUpdate.newLatLng(

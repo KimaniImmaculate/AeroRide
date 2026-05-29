@@ -216,6 +216,11 @@ class RideController extends ChangeNotifier {
         destinationLocation = liveRide.destinationLocation.toLatLng();
         estimatedCost = liveRide.estimatedCost;
 
+        final rideVehicleLocation = liveRide.currentVehicleLocation;
+        if (rideVehicleLocation != null) {
+          driverLocation = rideVehicleLocation.toLatLng();
+        }
+
         // Set up driver subscription if accepted or in progress
         final driverId = liveRide.driverId;
         if (driverId != null &&
@@ -509,43 +514,62 @@ class RideController extends ChangeNotifier {
     required IconData icon,
   }) async {
     const size = 144.0;
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    final center = const Offset(size / 2, size / 2);
-    final radius = size / 2;
+    // CanvasKit on web can lose context and cause late-init errors when creating
+    // pictures/images. Avoid building custom bitmap markers on web and fall
+    // back to a default marker to keep the app stable.
+    if (kIsWeb) {
+      // Choose a reasonable hue fallback based on the provided background
+      final hue = BitmapDescriptor.hueOrange;
+      return BitmapDescriptor.defaultMarkerWithHue(hue);
+    }
 
-    final shadowPaint = Paint()
-      ..color = Colors.black.withValues(alpha: 0.22)
-      ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 10);
-    canvas.drawCircle(center.translate(0, 5), radius * 0.74, shadowPaint);
+    try {
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      final center = const Offset(size / 2, size / 2);
+      final radius = size / 2;
 
-    final circlePaint = Paint()..color = background;
-    canvas.drawCircle(center, radius * 0.72, circlePaint);
+      final shadowPaint = Paint()
+        ..color = Colors.black.withOpacity(0.22)
+        ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 10);
+      canvas.drawCircle(center.translate(0, 5), radius * 0.74, shadowPaint);
 
-    final iconSpan = TextSpan(
-      text: String.fromCharCode(icon.codePoint),
-      style: TextStyle(
-        fontFamily: icon.fontFamily,
-        package: icon.fontPackage,
-        fontSize: 70,
-        color: Colors.white,
-      ),
-    );
-    final painter = TextPainter(
-      text: iconSpan,
-      textDirection: ui.TextDirection.ltr,
-    )..layout();
-    painter.paint(
-      canvas,
-      Offset(center.dx - painter.width / 2, center.dy - painter.height / 2),
-    );
+      final circlePaint = Paint()..color = background;
+      canvas.drawCircle(center, radius * 0.72, circlePaint);
 
-    final picture = recorder.endRecording();
-    final image = await picture.toImage(size.toInt(), size.toInt());
-    final data = await image.toByteData(format: ui.ImageByteFormat.png);
-    // fromBytes is deprecated in some SDK versions; suppress the lint here.
-    // ignore: deprecated_member_use
-    return BitmapDescriptor.fromBytes(data!.buffer.asUint8List());
+      final iconSpan = TextSpan(
+        text: String.fromCharCode(icon.codePoint),
+        style: TextStyle(
+          fontFamily: icon.fontFamily,
+          package: icon.fontPackage,
+          fontSize: 70,
+          color: Colors.white,
+        ),
+      );
+      final painter = TextPainter(
+        text: iconSpan,
+        textDirection: ui.TextDirection.ltr,
+      )..layout();
+      painter.paint(
+        canvas,
+        Offset(center.dx - painter.width / 2, center.dy - painter.height / 2),
+      );
+
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(size.toInt(), size.toInt());
+      final data = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (data == null) {
+        throw Exception('Failed to convert marker image to bytes');
+      }
+      // fromBytes is deprecated in some SDK versions; suppress the lint here.
+      // ignore: deprecated_member_use
+      return BitmapDescriptor.fromBytes(data.buffer.asUint8List());
+    } catch (e, st) {
+      debugPrint('RideController: Failed to build vehicle marker icon: $e');
+      debugPrintStack(stackTrace: st);
+      // Safe fallback
+      return BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange);
+    }
   }
 
   Future<void> startRiderLocationTracking() async {

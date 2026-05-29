@@ -70,6 +70,15 @@ class SimulationService {
           'isOnline': true,
           'updatedAt': Timestamp.now(),
         }, SetOptions(merge: true));
+        // Mirror to users collection so driver app subscriptions receive updates
+        try {
+          await _db.collection('users').doc(id).set({
+            'currentLocation': GeoPoint(pos.latitude, pos.longitude),
+            'current_location': GeoPoint(pos.latitude, pos.longitude),
+            'isOnline': true,
+            'updatedAt': Timestamp.now(),
+          }, SetOptions(merge: true));
+        } catch (_) {}
       } catch (_) {}
     });
   }
@@ -182,19 +191,50 @@ class SimulationService {
           // Leg 1: Moving to pickup
           if (step < toPickupPoints.length) {
             final pos = toPickupPoints[step];
-            await _db
-                .collection(_simulatedDriversCollection)
-                .doc(driverId)
-                .set({
+            final update = {
               'current_location': GeoPoint(pos.latitude, pos.longitude),
               'updatedAt': Timestamp.now(),
-            }, SetOptions(merge: true));
+            };
+            await _db.collection(_simulatedDriversCollection).doc(driverId).set(
+                  update,
+                  SetOptions(merge: true),
+                );
+            // Mirror to users document for driver subscriptions
+            try {
+              await _db.collection('users').doc(driverId).set({
+                'currentLocation': GeoPoint(pos.latitude, pos.longitude),
+                'current_location': GeoPoint(pos.latitude, pos.longitude),
+                'updatedAt': Timestamp.now(),
+              }, SetOptions(merge: true));
+            } catch (_) {}
+            await _db.collection('rides').doc(rideId).set(
+              {
+                'currentVehicleLocation': GeoPoint(
+                  pos.latitude,
+                  pos.longitude,
+                ),
+                'updatedAt': Timestamp.now(),
+              },
+              SetOptions(merge: true),
+            );
             step++;
           } else {
             // Arrived at pickup
             await _db.collection('rides').doc(rideId).update({
               'status': 'arrived',
+              'currentVehicleLocation': GeoPoint(
+                pickup.latitude,
+                pickup.longitude,
+              ),
             });
+            // Mirror pickup location to users doc
+            try {
+              await _db.collection('users').doc(driverId).set({
+                'currentLocation': GeoPoint(pickup.latitude, pickup.longitude),
+                'current_location': GeoPoint(pickup.latitude, pickup.longitude),
+                'updatedAt': Timestamp.now(),
+              }, SetOptions(merge: true));
+            } catch (_) {}
             leg = 2;
             waitingCounter = 0;
             debugPrint('SimulationService: Driver arrived at pickup.');
@@ -215,10 +255,31 @@ class SimulationService {
           // Leg 3: Moving to destination
           if (step < toDestPoints.length) {
             final pos = toDestPoints[step];
-            await _db.collection('drivers').doc(driverId).set({
+            await _db
+                .collection(_simulatedDriversCollection)
+                .doc(driverId)
+                .set({
               'current_location': GeoPoint(pos.latitude, pos.longitude),
               'updatedAt': Timestamp.now(),
             }, SetOptions(merge: true));
+            // Mirror to users collection so driver app subscriptions receive updates
+            try {
+              await _db.collection('users').doc(driverId).set({
+                'currentLocation': GeoPoint(pos.latitude, pos.longitude),
+                'current_location': GeoPoint(pos.latitude, pos.longitude),
+                'updatedAt': Timestamp.now(),
+              }, SetOptions(merge: true));
+            } catch (_) {}
+            await _db.collection('rides').doc(rideId).set(
+              {
+                'currentVehicleLocation': GeoPoint(
+                  pos.latitude,
+                  pos.longitude,
+                ),
+                'updatedAt': Timestamp.now(),
+              },
+              SetOptions(merge: true),
+            );
             step++;
           } else {
             // Arrived at destination
@@ -232,6 +293,26 @@ class SimulationService {
               ),
               'updatedAt': Timestamp.now(),
             }, SetOptions(merge: true));
+            // Mirror final destination to users doc
+            try {
+              await _db.collection('users').doc(driverId).set({
+                'currentLocation':
+                    GeoPoint(destination.latitude, destination.longitude),
+                'current_location':
+                    GeoPoint(destination.latitude, destination.longitude),
+                'updatedAt': Timestamp.now(),
+              }, SetOptions(merge: true));
+            } catch (_) {}
+            await _db.collection('rides').doc(rideId).set(
+              {
+                'currentVehicleLocation': GeoPoint(
+                  destination.latitude,
+                  destination.longitude,
+                ),
+                'updatedAt': Timestamp.now(),
+              },
+              SetOptions(merge: true),
+            );
             leg = 4;
             timer.cancel();
             _rideSimulationTimer = null;
