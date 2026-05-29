@@ -19,6 +19,7 @@ import 'wallet_view.dart';
 import '../../theme/aeroride_theme.dart';
 import '../role_selection_screen.dart';
 import '../../services/firestore_service.dart';
+import '../../services/mock_route_service.dart';
 import '../../models/ride_request_model.dart';
 
 class MockRideRequest {
@@ -1044,12 +1045,18 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final routes = data['routes'] as List<dynamic>?;
-      if (routes == null || routes.isEmpty) return <LatLng>[];
+      if (routes == null || routes.isEmpty) {
+        return MockRouteService.buildRoutePoints(origin, destination,
+            steps: 18);
+      }
 
       final route = routes[0] as Map<String, dynamic>;
       final polylineData = route['polyline'] as Map<String, dynamic>?;
       final encodedPolyline = polylineData?['encodedPolyline']?.toString();
-      if (encodedPolyline == null || encodedPolyline.isEmpty) return <LatLng>[];
+      if (encodedPolyline == null || encodedPolyline.isEmpty) {
+        return MockRouteService.buildRoutePoints(origin, destination,
+            steps: 18);
+      }
 
       final decodedPoints = PolylinePoints.decodePolyline(encodedPolyline);
       final roadPoints = decodedPoints
@@ -1069,7 +1076,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       return roadPoints;
     } catch (e) {
       debugPrint('Route fetch failed: $e');
-      return <LatLng>[];
+      return MockRouteService.buildRoutePoints(origin, destination, steps: 18);
     }
   }
 
@@ -1103,6 +1110,9 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
           setState(() {
             _currentDriverState = DriverRideState.arrivedAtPickup;
             _etaMinutes = 0;
+            _driverTraveledDistanceKm = 0.0;
+            _passengerLiveFareKsh = 100.0;
+            _driverLiveEarningsKsh = 0.0;
           });
 
           final destinationLatLng = _activeRideData?['destinationLatLng'];
@@ -1141,26 +1151,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       final currentPos = routePoints[_driverWaypointIndex];
 
       setState(() {
-        if (_driverWaypointIndex > 0) {
-          final previousPos = routePoints[_driverWaypointIndex - 1];
-          final segment = Geolocator.distanceBetween(
-                previousPos.latitude,
-                previousPos.longitude,
-                currentPos.latitude,
-                currentPos.longitude,
-              ) /
-              1000.0;
-          if (segment >= kSegmentThresholdKm) {
-            _driverTraveledDistanceKm += segment;
-          }
-        }
-
         _driverCurrentLocation = currentPos;
-
-        final fareResult =
-            computeFareAndEarnings(_driverTraveledDistanceKm, 0.0);
-        _passengerLiveFareKsh = fareResult.passengerFare;
-        _driverLiveEarningsKsh = fareResult.driverEarnings;
 
         _driverWaypointIndex++;
       });
