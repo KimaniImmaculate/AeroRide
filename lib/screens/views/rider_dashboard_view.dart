@@ -166,15 +166,25 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
         _availableDriversPool = drivers.map((d) {
           final raw = d['raw'] as Map<String, dynamic>? ?? {};
           final loc = d['location'] as LatLng?;
+          final etaValue = d['eta'] ?? raw['eta'];
+          final etaMinutes = etaValue is num
+              ? etaValue.toInt()
+              : int.tryParse(etaValue?.toString() ?? '') ?? 5;
+          final latValue = loc?.latitude ?? d['lat'] ?? aroundPoint.latitude;
+          final lngValue = loc?.longitude ?? d['lng'] ?? aroundPoint.longitude;
           return {
             'id': d['driverId'] ?? raw['driverId'] ?? '',
             'name': d['name'] ?? raw['name'] ?? 'Driver',
             'vehicle':
                 d['vehicle'] ?? raw['vehicle'] ?? raw['vehicleInfo'] ?? '',
             'rating': (d['rating'] ?? raw['rating'] ?? 4.8).toString(),
-            'eta': d['eta'] ?? 5,
-            'lat': loc?.latitude ?? d['lat'] ?? aroundPoint.latitude,
-            'lng': loc?.longitude ?? d['lng'] ?? aroundPoint.longitude,
+            'eta': etaMinutes,
+            'lat': latValue is num
+                ? latValue.toDouble()
+                : double.tryParse(latValue.toString()) ?? aroundPoint.latitude,
+            'lng': lngValue is num
+                ? lngValue.toDouble()
+                : double.tryParse(lngValue.toString()) ?? aroundPoint.longitude,
           };
         }).toList();
       });
@@ -696,11 +706,21 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
   }
 
   void _confirmDriverAndBook(Map<String, dynamic> driver) {
+    final driverLat = (driver['lat'] as num?)?.toDouble();
+    final driverLng = (driver['lng'] as num?)?.toDouble();
+    final driverLocation = (driverLat != null && driverLng != null)
+        ? LatLng(driverLat, driverLng)
+        : _rideController.riderLocation ?? const LatLng(-0.2831, 36.0664);
+    final etaValue = driver['eta'];
+    final etaMinutes = etaValue is num
+        ? etaValue.toInt()
+        : int.tryParse(etaValue?.toString() ?? '') ?? 5;
+
     setState(() {
       _selectedDriver = driver;
       _currentRideState = RideState.requesting;
-      _driverLocation = LatLng(driver['lat'], driver['lng']);
-      _etaMinutes = driver['eta'];
+      _driverLocation = driverLocation;
+      _etaMinutes = etaMinutes;
     });
 
     final fareToSave = _calculatedFareKsh > 0
@@ -746,7 +766,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       'dropoffGeo': GeoPoint(
           _destinationLocation!.latitude, _destinationLocation!.longitude),
       'currentVehicleLocation':
-          GeoPoint(_driverLocation!.latitude, _driverLocation!.longitude),
+          GeoPoint(driverLocation.latitude, driverLocation.longitude),
       'finalFareCharged': fareToSave,
       'estimatedCost': fareToSave,
       'driverEarnings': 0,
