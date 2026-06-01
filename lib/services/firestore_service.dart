@@ -9,10 +9,6 @@ import '../models/ride_type_model.dart';
 class FirestoreService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
-  // ==========================================
-  //      PRODUCTION INITIALIZATION & PROFILE
-  // ==========================================
-
   // Save User profile info to DB
   Future<void> createUserProfile(UserModel user) async {
     await _db
@@ -69,10 +65,6 @@ class FirestoreService {
 
     return rides.take(limit).toList();
   }
-
-  // ==========================================
-  //          PRODUCTION RIDE ACTIONS
-  // ==========================================
 
   // CREATE: Post a new ride request document to Firestore
   Future<String> createRideRequest(RideRequest rideRequest) async {

@@ -21,6 +21,7 @@ import '../../models/user_model.dart';
 import '../../services/firestore_service.dart';
 import '../../services/drivers_service.dart';
 import '../../services/mock_route_service.dart';
+import '../../services/mpesa_service.dart';
 import '../../theme/aeroride_theme.dart';
 import '../../utils/currency.dart';
 import '../../utils/browser_geolocation.dart';
@@ -74,6 +75,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
   final TextEditingController _pickupTextController = TextEditingController();
   final TextEditingController _destinationTextController =
       TextEditingController();
+  final TextEditingController _mpesaPhoneController = TextEditingController();
 
   String _pickupAddressString = "Not Selected";
   String _destinationAddressString = "Not Selected";
@@ -90,9 +92,12 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
   int _etaMinutes = 5;
   double _calculatedFareKsh = 0.0;
   String? _currentRideDocumentId;
+  bool _isPaymentProcessing = false;
+  String _paymentStatusMessage = '';
 
   Map<String, dynamic>? _selectedDriver;
   List<Map<String, dynamic>> _availableDriversPool = [];
+  final FirestoreService _firestoreService = FirestoreService();
   final DriversService _driversService = DriversService();
   final Set<Polyline> _mapPolylines = {};
   final Set<Marker> _mapMarkers = {};
@@ -112,6 +117,12 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       unawaited(_rideController.startRiderLocationTracking());
     });
     _rideController.loadRideTypes();
+
+    final dynamic currentUser = widget.user;
+    final initialPhone = currentUser?.phoneNumber?.toString() ?? '';
+    if (initialPhone.isNotEmpty) {
+      _mpesaPhoneController.text = initialPhone;
+    }
 
     _rideController.onDriverArrived = (driverName, vehicleInfo) {
       if (!mounted) return;
@@ -142,6 +153,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
     }
     _pickupTextController.dispose();
     _destinationTextController.dispose();
+    _mpesaPhoneController.dispose();
     super.dispose();
   }
 
@@ -706,6 +718,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
   }
 
   void _confirmDriverAndBook(Map<String, dynamic> driver) {
+    final selectedDriverId = driver['id']?.toString() ?? '';
     final driverLat = (driver['lat'] as num?)?.toDouble();
     final driverLng = (driver['lng'] as num?)?.toDouble();
     final driverLocation = (driverLat != null && driverLng != null)
@@ -735,6 +748,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
     _currentRideDocumentId = rideRequestRef.id;
     rideRequestRef.set({
       'id': rideRequestRef.id,
+      'driverId': selectedDriverId.isNotEmpty ? selectedDriverId : null,
       'userId': widget.user.uid,
       'riderId': widget.user.uid,
       'riderName': widget.user.displayName ?? 'AeroRide User',
@@ -756,6 +770,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
     FirebaseFirestore.instance.collection('rides').doc(rideRequestRef.id).set({
       'id': rideRequestRef.id,
+      'userId': widget.user.uid,
       'riderId': widget.user.uid,
       'riderName': widget.user.displayName ?? 'AeroRide User',
       'pickup': GeoPoint(_riderLocation!.latitude, _riderLocation!.longitude),
@@ -773,7 +788,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       'pickupAddress': _pickupAddressString,
       'destinationName': _destinationAddressString,
       'status': 'searching',
-      'driverId': null,
+      'driverId': selectedDriverId.isNotEmpty ? selectedDriverId : null,
       'createdAt': FieldValue.serverTimestamp(),
     });
 
@@ -795,6 +810,98 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
     await _fetchRoadRouteForPhase(_riderLocation!, _destinationLocation!);
     _startProgressiveInTransitSimulation(TravelPhase.riderToDestination);
+  }
+
+  Future<void> _completeRidePayment() async {
+    if (_isPaymentProcessing) return;
+
+    final rideDocumentId = _currentRideDocumentId;
+    final driverId = _selectedDriver?['id']?.toString() ?? '';
+    final rawPhone = _mpesaPhoneController.text.trim();
+    final fareToSettle =
+        _calculatedFareKsh > 0 ? _calculatedFareKsh : _liveRunningFareKsh;
+    final normalizedPhone = _normalizeMpesaPhone(rawPhone);
+
+    if (rideDocumentId == null || rideDocumentId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No active ride was found to settle.')),
+      );
+      return;
+    }
+
+    if (driverId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Driver details are missing for this trip.')),
+      );
+      return;
+    }
+
+    if (normalizedPhone == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a valid M-Pesa phone number.')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isPaymentProcessing = true;
+      _paymentStatusMessage = 'Sending STK Push to $normalizedPhone...';
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+            'STK push requested for $normalizedPhone. Check your phone to approve payment.'),
+      ),
+    );
+
+    try {
+      await MpesaService().payWithMpesa(
+        phone: normalizedPhone,
+        amount: fareToSettle,
+        context: context,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        _isPaymentProcessing = false;
+        _paymentStatusMessage =
+            'STK push sent. Follow the prompt on your phone to complete payment.';
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'STK push sent successfully. Approve the payment prompt on your phone.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _isPaymentProcessing = false;
+        _paymentStatusMessage = 'Payment request failed.';
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Payment could not be completed: $e')),
+      );
+    }
+  }
+
+  String? _normalizeMpesaPhone(String input) {
+    final digits = input.replaceAll(RegExp(r'\D'), '');
+    if (digits.length == 12 && digits.startsWith('254')) return digits;
+    if (digits.length == 10 && digits.startsWith('0')) {
+      return '254${digits.substring(1)}';
+    }
+    if (digits.length == 9) {
+      return '254$digits';
+    }
+    return null;
   }
 
   Future<void> _fetchRoadRouteForPhase(
@@ -1860,6 +1967,20 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
             const Text('Outstanding Fare Payment',
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
             const SizedBox(height: 12),
+            TextField(
+              controller: _mpesaPhoneController,
+              keyboardType: TextInputType.phone,
+              decoration: InputDecoration(
+                labelText: 'M-Pesa Phone Number',
+                hintText: '07XXXXXXXX or 2547XXXXXXXX',
+                filled: true,
+                fillColor: Colors.grey.shade50,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -1879,24 +2000,29 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
               ),
             ),
             const SizedBox(height: 14),
+            if (_paymentStatusMessage.isNotEmpty) ...[
+              Text(
+                _paymentStatusMessage,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: _isPaymentProcessing ? Colors.blueGrey : Colors.green,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             ElevatedButton(
-              onPressed: () {
-                setState(() {
-                  _currentRideState = RideState.idle;
-                  _riderLocation = null;
-                  _destinationLocation = null;
-                  _driverLocation = null;
-                  _pickupTextController.clear();
-                  _destinationTextController.clear();
-                  _mapPolylines.clear();
-                });
-              },
+              onPressed: _isPaymentProcessing ? null : _completeRidePayment,
               style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.green,
                   padding: const EdgeInsets.symmetric(vertical: 14)),
-              child: const Text('Pay Now via M-Pesa / Card',
-                  style: TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.bold)),
+              child: Text(
+                _isPaymentProcessing
+                    ? 'Sending STK Push...'
+                    : 'Pay Now via M-Pesa STK',
+                style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.bold),
+              ),
             ),
           ],
         );
