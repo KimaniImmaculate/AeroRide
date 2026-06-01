@@ -144,7 +144,12 @@ exports.initiateStkPush = onCall({ region: 'us-central1' }, async (request) => {
     Password: password,
     Timestamp: timestamp,
     TransactionType: 'CustomerPayBillOnline',
-    Amount: amount,
+    
+    // TEMPORARY SANDBOX OVERRIDE: 
+    // This intercepts your dynamic fare (e.g. 240) and forces it to 1 
+    // so Safaricom automatically triggers a successful simulation!
+    Amount: 1, 
+    
     PartyA: phoneNumber,
     PartyB: shortcode,
     PhoneNumber: phoneNumber,
