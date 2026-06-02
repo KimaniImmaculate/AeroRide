@@ -1,34 +1,48 @@
 {
-	"flutter": {
-		"platforms": {
-			"android": {
-				"default": {
-					"projectId": "aeroride-1",
-					"appId": "1:111977761046:android:db4e10e518fa6a3520a837",
-					"fileOutput": "android/app/google-services.json"
-				}
-			},
-			"dart": {
-				"lib/firebase_options.dart": {
-					"projectId": "aeroride-1",
-					"configurations": {
-						"android": "1:111977761046:android:db4e10e518fa6a3520a837",
-						"web": "1:111977761046:web:430fd1ffbd27f87a20a837"
-					}
-				}
-			}
-		}
-	},
-	"firestore": {
-		"rules": "firestore.rules"
-	},
-	"functions": {
-		"source": "functions"
-	},
-	"emulators": {
-		"functions": {
-			"host": "127.0.0.1",
-			"port": 5001
-		}
-	}
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "aeroride-1",
+          "appId": "1:111977761046:android:db4e10e518fa6a3520a837",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "aeroride-1",
+          "configurations": {
+            "android": "1:111977761046:android:db4e10e518fa6a3520a837",
+            "web": "1:111977761046:web:430fd1ffbd27f87a20a837"
+          }
+        }
+      }
+    }
+  },
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "functions": {
+    "source": "functions"
+  },
+  "emulators": {
+    "functions": {
+      "host": "127.0.0.1",
+      "port": 5001
+    }
+  },
+  "hosting": {
+    "public": "build/web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
 }

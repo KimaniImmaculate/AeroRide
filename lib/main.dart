@@ -18,13 +18,18 @@ import 'package:aeroride/screens/views/rider_dashboard_view.dart'
 import 'package:aeroride/services/auth_service.dart';
 import 'package:aeroride/services/notification_service.dart';
 import 'package:aeroride/theme/aeroride_theme.dart';
+import 'package:flutter/foundation.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  if (kIsWeb) {
+
+  // 2. Change kIsWeb to kDebugMode
+  if (kDebugMode) {
     FirebaseFunctions.instance.useFunctionsEmulator('localhost', 5001);
+    print("Running in Debug Mode: Using local Firebase Emulators");
   }
+
   unawaited(_initNotifications());
   runApp(const AeroRideApp());
 }

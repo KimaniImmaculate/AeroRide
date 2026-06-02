@@ -876,6 +876,10 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
         phone: normalizedPhone,
         amount: fareToSettle,
         context: context,
+        onSuccess: () {
+          // Explicit placeholder callback wrapper if required by the service definition
+          debugPrint('MpesaService internally confirmed modal dismissal.');
+        },
       );
 
       if (!mounted) return;
@@ -884,7 +888,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
         _paymentStatusMessage = 'Payment verified! Updating your ride data...';
       });
 
-      // 2. SAFE FIRESTORE UPDATE (No deep nesting to avoid syntax errors)
+      // 2. SAFE FIRESTORE UPDATE
       if (rideDocumentId.isNotEmpty) {
         try {
           await FirebaseFirestore.instance
@@ -906,19 +910,23 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       setState(() {
         _isPaymentProcessing = false;
         _paymentStatusMessage = 'Payment Successful!';
+
+        // 🌟 THE FIX: Directly switch off the visibility panels holding up the checkout screens
+        // Replace these with the exact names of the UI state variables used in your layout!
+        _currentRideDocumentId = null;
+        _selectedDriver = null;
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Payment Received! Heading back...'),
+          content: Text('Payment Received! Heading back to map...'),
           backgroundColor: Colors.green,
         ),
       );
 
       await Future.delayed(const Duration(seconds: 2));
 
-      if (!mounted) return;
-      Navigator.of(context).pop();
+      // ✅ REMOVED: Navigator.of(context).pop(); has been dropped to prevent crashing to a blank template layout.
     } catch (e) {
       if (!mounted) return;
       print("M-Pesa Core Service Error: $e");
