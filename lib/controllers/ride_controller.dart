@@ -87,18 +87,28 @@ class RideController extends ChangeNotifier {
       currentRideStatus = "REQUESTING...";
       notifyListeners();
 
-      // Keep the request path short so the ride document is created before
-      // slower discovery and pricing work runs in the background.
-      const candidateTargetCount = 2;
+      // 👤 LAZY-AUTH FALLBACK: If the user hasn't registered a real name yet, enforce a guest placeholder
+      final resolvedRiderName =
+          riderName.trim().isEmpty ? "Guest Rider" : riderName;
+
       final rideFare = _estimateBaseFare(rideType);
-      final resolvedCandidateDrivers =
+
+      final List<String> resolvedCandidateDrivers =
           candidateDriverIds == null || candidateDriverIds.isEmpty
               ? <String>[]
               : List<String>.from(candidateDriverIds);
 
+      if (kDebugMode && resolvedCandidateDrivers.isEmpty) {
+        resolvedCandidateDrivers.addAll([
+          '9n2x9lzSBTVS3nxM163tGtLo34y2', // Kiprono
+          'c4D05EH5MYW1F9FiBU0lD9z1WQh2', // Cheptoo
+        ]);
+      }
+
       final newRide = RideRequest(
         userId: userId,
-        riderName: riderName,
+        riderName:
+            resolvedRiderName, // 👈 Uses the safe fallback placeholder name
         pickupLocation: pickup.toGeoPoint(),
         destinationLocation: destination.toGeoPoint(),
         pickupAddress: pickupText,

@@ -65,4 +65,5 @@ class DefaultFirebaseOptions {
     projectId: 'aeroride-1',
     storageBucket: 'aeroride-1.firebasestorage.app',
   );
+
 }
