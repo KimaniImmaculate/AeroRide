@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flutter/foundation.dart';
 import 'package:aeroride/services/mock_route_service.dart';
@@ -241,15 +242,38 @@ class SimulationService {
           }
         } else if (leg == 2) {
           // Leg 2: Waiting at pickup (representing rider boarding)
-          waitingCounter++;
-          if (waitingCounter >= 4) {
-            // Start trip
+          if (waitingCounter == 0) {
+            waitingCounter =
+                1; // Mark as waiting to prevent multiple triggers during the 7s delay
+
+            // Trigger Security OTP SMS simulation via Firebase Auth
+            try {
+              final rideDoc = await _db.collection('rides').doc(rideId).get();
+              final riderId = rideDoc.data()?['userId'];
+              if (riderId != null) {
+                final userDoc =
+                    await _db.collection('users').doc(riderId).get();
+                String? phoneNumber = userDoc.data()?['phoneNumber'];
+
+                if (phoneNumber != null && phoneNumber.isNotEmpty) {
+                  debugPrint(
+                      'SimulationService: Sending Security OTP to $phoneNumber');
+                  await FirebaseAuth.instance
+                      .signInWithPhoneNumber(phoneNumber);
+                }
+              }
+            } catch (e) {
+              debugPrint('SimulationService: OTP SMS simulation failed: $e');
+            }
+
+            await Future.delayed(const Duration(seconds: 7));
             await _db.collection('rides').doc(rideId).update({
               'status': 'started',
             });
             leg = 3;
             step = 0;
-            debugPrint('SimulationService: Trip started.');
+            debugPrint(
+                'SimulationService: Security OTP handoff validated. Trip started.');
           }
         } else if (leg == 3) {
           // Leg 3: Moving to destination

@@ -1995,9 +1995,37 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                     fontSize: 20,
                     color: Colors.green)),
             const SizedBox(height: 6),
-            const Text(
-                'Your vehicle is currently waiting at your specified pickup point.',
-                style: TextStyle(fontSize: 13)),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.green.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.green.shade100),
+              ),
+              child: Column(
+                children: [
+                  const Text(
+                    'SHARE THIS PIN WITH DRIVER',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.2,
+                      color: Colors.green,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _rideController.rideVerificationOtp ?? '----',
+                    style: const TextStyle(
+                      fontSize: 32,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 8,
+                      color: Colors.black,
+                    ),
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 16),
             ElevatedButton(
               onPressed: _startTripTransit,
@@ -2135,6 +2163,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
     final TextEditingController emailController = TextEditingController();
     final TextEditingController passwordController = TextEditingController();
     final TextEditingController nameController = TextEditingController();
+    final TextEditingController phoneController = TextEditingController();
 
     // Dedicated Multi-Factor SMS Verification Controllers
     final TextEditingController mfaSmsController = TextEditingController();
@@ -2514,6 +2543,17 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                               ),
                             ),
                             const SizedBox(height: 12),
+                            TextField(
+                              controller: phoneController,
+                              keyboardType: TextInputType.phone,
+                              decoration: InputDecoration(
+                                labelText: 'Phone Number',
+                                prefixIcon: const Icon(Icons.phone_outlined),
+                                border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
                           ],
 
                           TextField(
@@ -2554,10 +2594,12 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                                     final password =
                                         passwordController.text.trim();
                                     final name = nameController.text.trim();
+                                    final phone = phoneController.text.trim();
 
                                     if (email.isEmpty ||
                                         password.isEmpty ||
-                                        (localIsSignUpMode && name.isEmpty)) {
+                                        (localIsSignUpMode &&
+                                            (name.isEmpty || phone.isEmpty))) {
                                       ScaffoldMessenger.of(context)
                                           .showSnackBar(
                                         const SnackBar(
@@ -2573,7 +2615,8 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                                     try {
                                       if (localIsSignUpMode) {
                                         await authService.signUp(
-                                            name, email, password, "rider");
+                                            name, email, password, "rider",
+                                            phoneNumber: phone);
 
                                         if (context.mounted) {
                                           Navigator.pop(dialogContext);

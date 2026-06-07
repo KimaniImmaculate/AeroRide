@@ -107,7 +107,6 @@ exports.initiateStkPush = onRequest({ region: 'us-central1', cors: true }, async
     const timestamp = getTimestamp();
     const shortcode = mpesaConfig.shortcode || MPESA_SHORTCODE;
     const passkey = mpesaConfig.passkey || MPESA_PASSKEY;
-    const callbackUrl = "https://us-central1-aeroride-1.cloudfunctions.net/mpesaCallback";
     const password = Buffer.from(`${shortcode}${passkey}${timestamp}`).toString('base64');
 
     const stkPayload = {
@@ -119,7 +118,7 @@ exports.initiateStkPush = onRequest({ region: 'us-central1', cors: true }, async
       PartyA: phoneNumber,
       PartyB: shortcode,
       PhoneNumber: phoneNumber,
-      CallBackURL: callbackUrl,
+      CallBackURL: mpesaConfig.callbackUrl,
       AccountReference: 'AeroRide',
       TransactionDesc: 'AeroRide ride payment',
     };
@@ -135,6 +134,17 @@ exports.initiateStkPush = onRequest({ region: 'us-central1', cors: true }, async
     });
 
     console.log('initiateStkPush: stk status', stkResponse.status);
+
+    if (stkResponse.ok) {
+      const checkoutRequestID = stkResponse.body?.CheckoutRequestID;
+      if (checkoutRequestID) {
+        await db.collection('payments').doc(checkoutRequestID).set({
+          status: 'PENDING',
+          phoneNumber: phoneNumber,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+    }
 
     if (!stkResponse.ok) {
       res.status(400).json({ 
@@ -192,8 +202,31 @@ exports.mpesaCallback = onRequest({ region: 'us-central1', cors: true }, async (
     }
 
     console.log("M-Pesa Callback Payload received:", payload);
-    // ... (Your database update logic goes here) ...
     
+    const body = payload.Body?.stkCallback;
+    if (body) {
+      const checkoutRequestID = body.CheckoutRequestID;
+      const status = body.ResultCode === 0 ? 'SUCCESSFUL' : 'FAILED';
+      
+      const updateData = {
+        status: status,
+        resultCode: body.ResultCode,
+        resultDesc: body.ResultDesc,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      // Extract M-Pesa Receipt Number from metadata if successful
+      if (body.ResultCode === 0 && body.CallbackMetadata) {
+        const items = body.CallbackMetadata.Item || [];
+        const receiptItem = items.find(i => i.Name === 'MpesaReceiptNumber');
+        if (receiptItem) {
+          updateData.receiptNumber = receiptItem.Value;
+        }
+      }
+
+      await db.collection('payments').doc(checkoutRequestID).update(updateData);
+    }
+
     res.status(200).send({ ResultCode: 0, ResultDesc: "Accepted successfully" });
 
   } catch (callbackError) {

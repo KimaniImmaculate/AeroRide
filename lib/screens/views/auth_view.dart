@@ -19,6 +19,7 @@ class _AuthScreenState extends State<AuthScreen> {
   final AuthService _authService = AuthService();
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _identifierController = TextEditingController();
+  final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _isLogin = true;
   bool _isSubmitting = false;
@@ -28,6 +29,7 @@ class _AuthScreenState extends State<AuthScreen> {
   void dispose() {
     _nameController.dispose();
     _identifierController.dispose();
+    _phoneController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
@@ -116,10 +118,18 @@ class _AuthScreenState extends State<AuthScreen> {
                       ],
                       const SizedBox(height: 22),
                       AeroRideTextField(
-                        hint: 'Email or Phone',
+                        hint: 'Email Address',
                         icon: Icons.mail_outline_rounded,
                         controller: _identifierController,
                       ),
+                      if (!_isLogin) ...[
+                        const SizedBox(height: 14),
+                        AeroRideTextField(
+                          hint: 'Phone Number',
+                          icon: Icons.phone_android_rounded,
+                          controller: _phoneController,
+                        ),
+                      ],
                       const SizedBox(height: 14),
                       AeroRideTextField(
                         hint: 'Password',
@@ -240,6 +250,7 @@ class _AuthScreenState extends State<AuthScreen> {
           email,
           password,
           _roleValue,
+          phoneNumber: _phoneController.text.trim(),
         );
         if (user != null) {
           await _authService.ensureUserProfileForRole(
@@ -297,9 +308,8 @@ class _LoginSignupToggle extends StatelessWidget {
                 child: Text(
                   'Login',
                   style: TextStyle(
-                    color: isLogin
-                        ? tokens.primaryDarkBlue
-                        : Colors.grey.shade600,
+                    color:
+                        isLogin ? tokens.primaryDarkBlue : Colors.grey.shade600,
                     fontWeight: FontWeight.w800,
                   ),
                 ),

@@ -13,6 +13,7 @@ class SignUpScreen extends StatefulWidget {
 class _SignUpScreenState extends State<SignUpScreen> {
   final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   final _authService = AuthService();
   bool _isLoading = false;
@@ -35,6 +36,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
         _emailCtrl.text,
         _passwordCtrl.text,
         detectedRole, // ✅ Passed dynamically instead of hardcoded string
+        phoneNumber: _phoneCtrl.text.trim(),
       );
 
       if (mounted && user != null) {
@@ -82,6 +84,12 @@ class _SignUpScreenState extends State<SignUpScreen> {
               controller: _emailCtrl,
               decoration: const InputDecoration(labelText: 'Email'),
               keyboardType: TextInputType.emailAddress,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _phoneCtrl,
+              decoration: const InputDecoration(labelText: 'Phone Number'),
+              keyboardType: TextInputType.phone,
             ),
             const SizedBox(height: 16),
             TextField(

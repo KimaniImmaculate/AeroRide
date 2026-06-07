@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class MpesaService {
   Future<void> payWithMpesa({
@@ -30,6 +32,8 @@ class MpesaService {
         final Map<String, dynamic> responseBody = jsonDecode(response.body);
         debugPrint(
             'MpesaService: STK push broadcasted: ${responseBody['data']}');
+
+        final checkoutRequestId = responseBody['data']?['CheckoutRequestID'];
 
         if (!context.mounted) return;
 
@@ -65,16 +69,61 @@ class MpesaService {
 
         if (!context.mounted) return;
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Processing payment... returning to map'),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 3),
+        // 2. Start checking for payment confirmation (Wait for the user)
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (loadingContext) => const Center(
+            child: Card(
+              child: Padding(
+                padding: EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('Verifying payment...'),
+                  ],
+                ),
+              ),
+            ),
           ),
         );
 
-        // ✅ THE FIX: Execute state cleanup routine to reset the UI component layout
-        onSuccess();
+        try {
+          final paymentDoc = FirebaseFirestore.instance
+              .collection('payments')
+              .doc(checkoutRequestId);
+          final snapshot = await paymentDoc
+              .snapshots()
+              .firstWhere((s) => s.exists && s.data()?['status'] != 'PENDING')
+              .timeout(const Duration(seconds: 60));
+
+          if (!context.mounted) return;
+          Navigator.of(context).pop(); // Dismiss loading indicator
+
+          final status = snapshot.data()?['status'];
+          if (status == 'SUCCESSFUL') {
+            final receipt = snapshot.data()?['receiptNumber'] ?? 'N/A';
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Payment Successful! Receipt: $receipt'),
+                  backgroundColor: Colors.green,
+                ),
+              );
+            }
+            onSuccess();
+          } else {
+            final desc = snapshot.data()?['resultDesc'] ?? 'Payment failed.';
+            throw Exception(desc);
+          }
+        } catch (e) {
+          if (context.mounted)
+            Navigator.of(context).pop(); // Dismiss loading indicator
+          throw Exception(
+              'Verification failed or timed out. Please check your M-Pesa.');
+        }
       } else {
         final Map<String, dynamic> errorBody = jsonDecode(response.body);
         final errorMessage =

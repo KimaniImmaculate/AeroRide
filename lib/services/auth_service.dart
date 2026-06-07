@@ -93,6 +93,10 @@ class AuthService {
       User? user = result.user;
 
       if (user != null) {
+        // Ensure Auth profile has a default name for immediate UI display
+        await user.updateDisplayName("Guest Rider");
+        await user.reload();
+
         UserModel guestUser = UserModel(
           uid: user.uid,
           name: "Guest Rider",
@@ -177,6 +181,19 @@ class AuthService {
       final User? user = userCredential.user;
 
       if (user != null) {
+        // Check if user exists in Firestore
+        final doc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+        if (!doc.exists) {
+          await logout(); // Sign them out of Firebase/Google if no profile exists
+          throw Exception(
+              "No AeroRide account found for this email. Please sign up first to create your profile.");
+        }
+      }
+
+      if (user != null) {
         await syncGoogleUserProfile(user);
       }
 
@@ -194,11 +211,14 @@ class AuthService {
     String name,
     String email,
     String password,
-    String role,
-  ) async {
+    String role, {
+    required String phoneNumber,
+  }) async {
     try {
-      if (email.trim().isEmpty || password.trim().isEmpty) {
-        throw Exception('Email and password are required.');
+      if (email.trim().isEmpty ||
+          password.trim().isEmpty ||
+          phoneNumber.trim().isEmpty) {
+        throw Exception('Email, password, and phone number are required.');
       }
 
       User? currentUser = _auth.currentUser;
@@ -227,16 +247,26 @@ class AuthService {
       }
 
       if (finalUser != null) {
+        // Ensure the internal Firebase Auth profile has the name for UI display
+        await finalUser.updateDisplayName(name.trim());
+        // Reload to ensure changes are reflected in the current object
+        await finalUser.reload();
+        finalUser = _auth.currentUser;
+
         UserModel upgradedUser = UserModel(
-          uid: finalUser.uid,
+          uid: finalUser!.uid,
           name: name,
           email: email,
           role: role,
+          // Note: Ensure your UserModel supports phoneNumber or pass it in the map
         );
         try {
-          await _firestoreService
-              .upsertUserProfile(upgradedUser)
-              .timeout(const Duration(seconds: 8));
+          final userMap = upgradedUser.toJson();
+          userMap['phoneNumber'] = phoneNumber;
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(finalUser.uid)
+              .set(userMap, SetOptions(merge: true));
         } catch (error) {
           if (_isNonFatalFirestoreError(error) || error is TimeoutException) {
             debugPrint('Signup profile write tracking skipped: $error');
@@ -266,29 +296,12 @@ class AuthService {
           await userDocRef.get().timeout(const Duration(seconds: 10));
 
       if (docSnapshot.exists) {
-        final Map<String, dynamic>? data = docSnapshot.data();
-        debugPrint(
-            "Welcome back ${data?['name'] ?? 'User'}. Profile data restored safely.");
-      } else {
-        UserModel newUser = UserModel(
-          uid: user.uid,
-          name: user.displayName ?? 'New Rider',
-          email: user.email ?? '',
-          role: 'rider',
-        );
-
-        await userDocRef.set({
-          'uid': newUser.uid,
-          'name': newUser.name,
-          'email': newUser.email,
-          'role': newUser.role,
+        // Just update existing profile with latest Google info if needed
+        await userDocRef.update({
           'profilePic': user.photoURL ?? '',
-          'createdAt': FieldValue.serverTimestamp(),
-          'phoneNumber': user.phoneNumber ?? '',
-        }).timeout(const Duration(seconds: 8));
-
-        debugPrint(
-            "New account successfully created in database for ${user.displayName}.");
+          'lastLogin': FieldValue.serverTimestamp(),
+        });
+        debugPrint("Google profile synced for ${user.displayName}.");
       }
     } catch (e) {
       debugPrint("Error running profile synchronization task: $e");
@@ -411,12 +424,19 @@ class AuthService {
       return;
     }
 
+    final nameToUse = (name == null || name.trim().isEmpty)
+        ? (user.displayName ??
+            (user.isAnonymous ? 'Guest Rider' : 'AeroRide User'))
+        : name.trim();
+
+    // Sync the name back to Firebase Auth if provided and different
+    if (user.displayName != nameToUse) {
+      await user.updateDisplayName(nameToUse);
+    }
+
     final profile = UserModel(
       uid: user.uid,
-      name: (name == null || name.trim().isEmpty)
-          ? (user.displayName ??
-              (user.isAnonymous ? 'Guest Rider' : 'AeroRide User'))
-          : name.trim(),
+      name: nameToUse,
       email: user.email ?? '',
       role: role,
     );

@@ -45,6 +45,7 @@ class RideController extends ChangeNotifier {
   double? estimatedCost;
   String? driverVehicle;
   String? driverRating;
+  String? rideVerificationOtp;
 
   // Real-time tracking data
   int driverEtaMinutes = 0;
@@ -262,9 +263,20 @@ class RideController extends ChangeNotifier {
 
         // Notify UI when driver arrives
         if (prevStatus != 'ARRIVED' && currentRideStatus == 'ARRIVED') {
-          try {
+          // Only generate a new OTP if one doesn't exist yet to prevent overwrites
+          if (rideVerificationOtp == null || rideVerificationOtp == '----') {
             final driverName = assignedDriverProfile?.name ?? 'Driver';
             final vehicle = driverVehicle ?? '';
+            
+            // Generate a 4-digit PIN for the rider to share with the driver
+            final String randomPin = (1000 + Random().nextInt(9000)).toString();
+            rideVerificationOtp = randomPin;
+
+            // Persist the PIN to Firestore so the driver can verify it
+            await FirebaseFirestore.instance.collection('rides').doc(rideId).update({
+              'otp': randomPin,
+            });
+
             await _sendArrivalNotification(liveRide);
             if (onDriverArrived != null) {
               onDriverArrived!.call(driverName, vehicle);
@@ -275,6 +287,25 @@ class RideController extends ChangeNotifier {
                 body: '$driverName has arrived in $vehicle',
               );
             } catch (_) {}
+            try {
+              String? riderPhone =
+                  FirebaseAuth.instance.currentUser?.phoneNumber;
+
+              // Fallback for testing: If the current Auth user doesn't have a phone attached
+              // (e.g. Email/Google login), use your designated testing number.
+              if (kDebugMode && (riderPhone == null || riderPhone.isEmpty)) {
+                riderPhone = '+254712345678'; // Your whitelisted testing number
+              }
+
+              if (riderPhone != null && riderPhone.isNotEmpty) {
+                debugPrint(
+                    'RideController: Triggering Trip Security OTP challenge for $riderPhone');
+                await FirebaseAuth.instance.signInWithPhoneNumber(riderPhone);
+              }
+            } catch (e) {
+              debugPrint(
+                  'RideController: Phone OTP simulation trigger failed: $e');
+            }
           } catch (_) {}
         }
 
