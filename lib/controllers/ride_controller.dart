@@ -267,13 +267,16 @@ class RideController extends ChangeNotifier {
           if (rideVerificationOtp == null || rideVerificationOtp == '----') {
             final driverName = assignedDriverProfile?.name ?? 'Driver';
             final vehicle = driverVehicle ?? '';
-            
+
             // Generate a 4-digit PIN for the rider to share with the driver
             final String randomPin = (1000 + Random().nextInt(9000)).toString();
             rideVerificationOtp = randomPin;
 
             // Persist the PIN to Firestore so the driver can verify it
-            await FirebaseFirestore.instance.collection('rides').doc(rideId).update({
+            await FirebaseFirestore.instance
+                .collection('rides')
+                .doc(rideId)
+                .update({
               'otp': randomPin,
             });
 
@@ -306,7 +309,7 @@ class RideController extends ChangeNotifier {
               debugPrint(
                   'RideController: Phone OTP simulation trigger failed: $e');
             }
-          } catch (_) {}
+          }
         }
 
         _updateMarkersAndPolylines();
