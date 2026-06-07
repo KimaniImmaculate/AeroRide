@@ -28,6 +28,7 @@ class _RiderSignupScreenState extends State<RiderSignupScreen> {
         _emailCtrl.text,
         _passwordCtrl.text,
         'rider',
+        phoneNumber: _phoneCtrl.text,
       );
       if (user != null) {
         await _authService.ensureUserProfileForRole(

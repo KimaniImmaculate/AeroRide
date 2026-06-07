@@ -227,6 +227,10 @@ class RideController extends ChangeNotifier {
         destinationLocation = liveRide.destinationLocation.toLatLng();
         estimatedCost = liveRide.estimatedCost;
 
+        // TODO: Add 'final String? otp;' to your RideRequest model class
+        // and map it in the fromJson() method to enable the line below:
+        // rideVerificationOtp = liveRide.otp;
+
         final rideVehicleLocation = liveRide.currentVehicleLocation;
         if (rideVehicleLocation != null) {
           driverLocation = rideVehicleLocation.toLatLng();

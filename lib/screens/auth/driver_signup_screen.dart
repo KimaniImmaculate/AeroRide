@@ -29,6 +29,7 @@ class _DriverSignupScreenState extends State<DriverSignupScreen> {
         _emailCtrl.text,
         _passwordCtrl.text,
         'driver',
+        phoneNumber: _phoneCtrl.text,
       );
       if (user != null) {
         await _authService.ensureUserProfileForRole(
