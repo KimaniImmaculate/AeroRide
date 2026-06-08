@@ -14,6 +14,7 @@ class RideRequest {
   final String status;
   final double estimatedCost;
   final String? rideType;
+  final String? otp;
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
@@ -31,6 +32,7 @@ class RideRequest {
     required this.status,
     required this.estimatedCost,
     this.rideType,
+    this.otp,
     this.createdAt,
     this.updatedAt,
   });
@@ -57,6 +59,7 @@ class RideRequest {
       destinationAddress:
           map['destinationAddress'] ?? map['destinationName'] ?? '',
       status: map['status'] ?? 'searching',
+      otp: map['otp'] as String?,
       estimatedCost: fareValue?.toDouble() ?? 0.0,
       createdAt: (map['createdAt'] as Timestamp?)?.toDate() ??
           (map['updatedAt'] as Timestamp?)?.toDate(),
@@ -80,6 +83,7 @@ class RideRequest {
       'status': status,
       'estimatedCost': estimatedCost,
       'finalFareCharged': estimatedCost,
+      'otp': otp,
       'rideType': rideType ?? 'standard',
       if (createdAt != null) 'createdAt': Timestamp.fromDate(createdAt!),
       if (updatedAt != null) 'updatedAt': Timestamp.fromDate(updatedAt!),

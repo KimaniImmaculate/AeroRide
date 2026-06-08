@@ -15,6 +15,7 @@ import 'package:aeroride/services/simulation_service.dart';
 import 'package:aeroride/models/user_model.dart';
 import 'package:aeroride/models/ride_type_model.dart';
 import 'package:aeroride/services/notification_service.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 typedef ArrivalCallback = void Function(String driverName, String vehicleInfo);
 
@@ -45,7 +46,7 @@ class RideController extends ChangeNotifier {
   double? estimatedCost;
   String? driverVehicle;
   String? driverRating;
-  String? rideVerificationOtp;
+  String? rideVerificationOtp = '----';
 
   // Real-time tracking data
   int driverEtaMinutes = 0;
@@ -61,6 +62,9 @@ class RideController extends ChangeNotifier {
 
   BitmapDescriptor? _driverMarkerIcon;
   BitmapDescriptor? _nearbyDriverMarkerIcon;
+  BitmapDescriptor? _kipronoIcon;
+  BitmapDescriptor? _cheptooIcon;
+  BitmapDescriptor? _cheronoIcon;
   bool _markerIconsLoading = false;
 
   String get driverEtaLabel {
@@ -85,12 +89,14 @@ class RideController extends ChangeNotifier {
     final simulationMode = kDebugMode;
 
     try {
-      currentRideStatus = "REQUESTING...";
+      currentRideStatus = "CONTACTING DRIVER...";
       notifyListeners();
 
       // 👤 LAZY-AUTH FALLBACK: If the user hasn't registered a real name yet, enforce a guest placeholder
-      final resolvedRiderName =
-          riderName.trim().isEmpty ? "Guest Rider" : riderName;
+      final freshUser = FirebaseAuth.instance.currentUser;
+      final resolvedRiderName = (freshUser?.displayName?.isNotEmpty ?? false)
+          ? freshUser!.displayName!
+          : (riderName.trim().isEmpty ? "Guest Rider" : riderName);
 
       final rideFare = _estimateBaseFare(rideType);
 
@@ -99,15 +105,39 @@ class RideController extends ChangeNotifier {
               ? <String>[]
               : List<String>.from(candidateDriverIds);
 
-      if (kDebugMode && resolvedCandidateDrivers.isEmpty) {
-        resolvedCandidateDrivers.addAll([
-          '9n2x9lzSBTVS3nxM163tGtLo34y2', // Kiprono
-          'c4D05EH5MYW1F9FiBU0lD9z1WQh2', // Cheptoo
-        ]);
+      // Use dynamically registered drivers for simulation if none were provided
+      if (simulationMode && resolvedCandidateDrivers.isEmpty) {
+        final nearby = await _driversService.getSelectableDrivers(
+          referenceLocation: pickup,
+          limit: 3,
+        );
+        resolvedCandidateDrivers.addAll(
+          nearby.map((d) => (d['driverId'] ?? d['id']).toString()).toList(),
+        );
+      }
+
+      // Ensure mock drivers are active in simulation mode to prevent matching stalls
+      if (simulationMode && resolvedCandidateDrivers.isNotEmpty) {
+        await SimulationService.prepareDriversForSimulation(
+          resolvedCandidateDrivers,
+          pickup,
+        );
+
+        // Re-read the assigned driver to populate local state instantly
+        final driverSnap = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(resolvedCandidateDrivers.first)
+            .get();
+        if (driverSnap.exists) {
+          final data = driverSnap.data()!;
+          final gp = (data['currentLocation'] ?? data['current_location'])
+              as GeoPoint?;
+          if (gp != null) driverLocation = gp.toLatLng();
+        }
       }
 
       final newRide = RideRequest(
-        userId: userId,
+        userId: freshUser?.uid ?? userId, // Ensure we use the authenticated UID
         riderName:
             resolvedRiderName, // 👈 Uses the safe fallback placeholder name
         pickupLocation: pickup.toGeoPoint(),
@@ -227,9 +257,10 @@ class RideController extends ChangeNotifier {
         destinationLocation = liveRide.destinationLocation.toLatLng();
         estimatedCost = liveRide.estimatedCost;
 
-        // TODO: Add 'final String? otp;' to your RideRequest model class
-        // and map it in the fromJson() method to enable the line below:
-        // rideVerificationOtp = liveRide.otp;
+        // Sync the verification PIN from the typed RideRequest model
+        if (liveRide.otp != null && liveRide.otp!.isNotEmpty) {
+          rideVerificationOtp = liveRide.otp;
+        }
 
         final rideVehicleLocation = liveRide.currentVehicleLocation;
         if (rideVehicleLocation != null) {
@@ -246,9 +277,10 @@ class RideController extends ChangeNotifier {
           _setupDriverSubscription(driverId);
           _setupDriverProfile(driverId);
 
-          // If it's a simulated driver and status is accepted, trigger the simulation runner
-          if (driverId.startsWith('sim-driver-') &&
-              currentRideStatus == 'ACCEPTED') {
+          // In simulation mode, treat any assigned driver as a simulation candidate
+          final isSimulated = kDebugMode;
+
+          if (isSimulated && currentRideStatus == 'ACCEPTED') {
             SimulationService.simulateRideLifecycle(
               rideId: rideId,
               driverId: driverId,
@@ -268,15 +300,18 @@ class RideController extends ChangeNotifier {
         // Notify UI when driver arrives
         if (prevStatus != 'ARRIVED' && currentRideStatus == 'ARRIVED') {
           // Only generate a new OTP if one doesn't exist yet to prevent overwrites
-          if (rideVerificationOtp == null || rideVerificationOtp == '----') {
+          if (rideVerificationOtp == '----') {
             final driverName = assignedDriverProfile?.name ?? 'Driver';
             final vehicle = driverVehicle ?? '';
 
-            // Generate a 4-digit PIN for the rider to share with the driver
+            // 1. Generate a random 4-digit PIN string right when the status shifts to ARRIVED
             final String randomPin = (1000 + Random().nextInt(9000)).toString();
-            rideVerificationOtp = randomPin;
 
-            // Persist the PIN to Firestore so the driver can verify it
+            // Update locally for instant display before the snapshot round-trip
+            rideVerificationOtp = randomPin;
+            notifyListeners();
+
+            // 2. Update the current active Firestore ride document immediately under the 'otp' field
             await FirebaseFirestore.instance
                 .collection('rides')
                 .doc(rideId)
@@ -294,25 +329,6 @@ class RideController extends ChangeNotifier {
                 body: '$driverName has arrived in $vehicle',
               );
             } catch (_) {}
-            try {
-              String? riderPhone =
-                  FirebaseAuth.instance.currentUser?.phoneNumber;
-
-              // Fallback for testing: If the current Auth user doesn't have a phone attached
-              // (e.g. Email/Google login), use your designated testing number.
-              if (kDebugMode && (riderPhone == null || riderPhone.isEmpty)) {
-                riderPhone = '+254712345678'; // Your whitelisted testing number
-              }
-
-              if (riderPhone != null && riderPhone.isNotEmpty) {
-                debugPrint(
-                    'RideController: Triggering Trip Security OTP challenge for $riderPhone');
-                await FirebaseAuth.instance.signInWithPhoneNumber(riderPhone);
-              }
-            } catch (e) {
-              debugPrint(
-                  'RideController: Phone OTP simulation trigger failed: $e');
-            }
           }
         }
 
@@ -450,8 +466,13 @@ class RideController extends ChangeNotifier {
   }
 
   void _updateMarkersAndPolylines() {
-    if ((_driverMarkerIcon == null || _nearbyDriverMarkerIcon == null) &&
-        !_markerIconsLoading) {
+    // Trigger marker icon loading if any required premium vector is missing
+    if (!_markerIconsLoading &&
+        (_driverMarkerIcon == null ||
+            _nearbyDriverMarkerIcon == null ||
+            _kipronoIcon == null ||
+            _cheptooIcon == null ||
+            _cheronoIcon == null)) {
       unawaited(_loadMarkerIcons());
     }
 
@@ -495,12 +516,19 @@ class RideController extends ChangeNotifier {
     }
 
     if (driverLocation != null) {
+      final String driverId = assignedDriverProfile?.uid ?? 'driver';
+      final String? name = assignedDriverProfile?.name;
+
       markers.add(
         Marker(
-          markerId: const MarkerId('driver'),
+          markerId: MarkerId(driverId),
           position: driverLocation!,
-          icon: _driverMarkerIcon ??
-              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+          icon: _getDriverIcon(
+            name,
+            _driverMarkerIcon ??
+                BitmapDescriptor.defaultMarkerWithHue(
+                    BitmapDescriptor.hueYellow),
+          ),
           infoWindow: InfoWindow(
             title: assignedDriverProfile?.name ?? "Driver",
             snippet: currentRideStatus == 'ACCEPTED'
@@ -537,17 +565,37 @@ class RideController extends ChangeNotifier {
     polylines.clear();
   }
 
+  /// Logic to swap generic pins for specific Lucide vector icons based on driver identity
+  BitmapDescriptor _getDriverIcon(String? name, BitmapDescriptor fallback) {
+    if (name == null) return fallback;
+    final lowerName = name.toLowerCase();
+    if (lowerName.contains('kiprono')) return _kipronoIcon ?? fallback;
+    if (lowerName.contains('cheptoo')) return _cheptooIcon ?? fallback;
+    if (lowerName.contains('cherono')) return _cheronoIcon ?? fallback;
+    return fallback;
+  }
+
   Future<void> _loadMarkerIcons() async {
     _markerIconsLoading = true;
     try {
-      _driverMarkerIcon = await _buildVehicleMarkerIcon(
-        background: const Color(0xFF0D2B52),
-        icon: Icons.directions_car_rounded,
+      // Standard application markers using Lucide vectors
+      _driverMarkerIcon = await getMarkerIconFromIconData(
+        LucideIcons.car,
+        color: Colors.blueAccent,
       );
-      _nearbyDriverMarkerIcon = await _buildVehicleMarkerIcon(
-        background: const Color(0xFFFF8A00),
-        icon: Icons.directions_car_filled_rounded,
+      _nearbyDriverMarkerIcon = await getMarkerIconFromIconData(
+        LucideIcons.car,
+        color: const Color(0xFFFF8A00),
       );
+
+      // Specific named driver markers (Kiprono: Blue, Cheptoo: Amber, Cherono: Green)
+      _kipronoIcon =
+          await getMarkerIconFromIconData(LucideIcons.car, color: Colors.blue);
+      _cheptooIcon = await getMarkerIconFromIconData(LucideIcons.carFront,
+          color: Colors.amber.shade600);
+      _cheronoIcon = await getMarkerIconFromIconData(LucideIcons.carTaxiFront,
+          color: Colors.green);
+
       _updateMarkersAndPolylines();
       notifyListeners();
     } catch (e) {
@@ -555,6 +603,36 @@ class RideController extends ChangeNotifier {
     } finally {
       _markerIconsLoading = false;
     }
+  }
+
+  /// Dynamically transforms any vector IconData into a crisp Google Maps BitmapDescriptor
+  Future<BitmapDescriptor> getMarkerIconFromIconData(
+    IconData iconData, {
+    required Color color,
+    double size = 70.0,
+  }) async {
+    final pictureRecorder = ui.PictureRecorder();
+    final canvas = ui.Canvas(pictureRecorder);
+    final textPainter = TextPainter(textDirection: TextDirection.ltr);
+
+    textPainter.text = TextSpan(
+      text: String.fromCharCode(iconData.codePoint),
+      style: TextStyle(
+        fontSize: size,
+        fontFamily: iconData.fontFamily,
+        package: iconData.fontPackage,
+        color: color,
+      ),
+    );
+
+    textPainter.layout();
+    textPainter.paint(canvas, const Offset(0, 0));
+
+    final picture = pictureRecorder.endRecording();
+    final image = await picture.toImage(size.toInt(), size.toInt());
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+
+    return BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
   }
 
   Future<BitmapDescriptor> _buildVehicleMarkerIcon({
@@ -845,6 +923,7 @@ class RideController extends ChangeNotifier {
     estimatedCost = null;
     driverVehicle = null;
     driverRating = null;
+    rideVerificationOtp = '----';
     notifyListeners();
   }
 

@@ -1,11 +1,12 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:aeroride/models/user_model.dart';
 import 'package:aeroride/services/firestore_service.dart';
 import 'package:google_sign_in/google_sign_in.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'; // For debugPrint and kIsWeb
+import 'package:firebase_auth_platform_interface/firebase_auth_platform_interface.dart'
+    show FirebaseAuthPlatform;
 
 /// A wrapper class to pass both a potential User or an active MFA Session back to your UI
 class AeroRideLoginResult {
@@ -24,6 +25,8 @@ class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final GoogleSignIn _googleSignIn = GoogleSignIn.instance;
   final FirestoreService _firestoreService = FirestoreService();
+
+  ConfirmationResult? _webConfirmationResult;
   DateTime? _profileWriteBackoffUntil;
 
   // Stream to listen to the user's login state (logged in vs logged out)
@@ -206,7 +209,16 @@ class AuthService {
     }
   }
 
-  // 1. SIGN UP (With support for upgrading an existing Anonymous Guest account)
+  /// HELPER: Normalizes phone numbers to E.164 format (+254...)
+  String _normalizePhone(String phone) {
+    String p = phone.trim();
+    if (p.startsWith('0')) {
+      p = '+254${p.substring(1)}';
+    }
+    return p;
+  }
+
+  // ✨ COMPATIBILITY SHIM: Single-shot signUp for legacy views
   Future<User?> signUp(
     String name,
     String email,
@@ -214,42 +226,136 @@ class AuthService {
     String role, {
     required String phoneNumber,
   }) async {
+    // This bypasses the multi-step OTP flow for legacy components.
+    // In production, use signUpWithPhoneOtp + verifyOtpAndCompleteSignup.
     try {
-      if (email.trim().isEmpty ||
-          password.trim().isEmpty ||
-          phoneNumber.trim().isEmpty) {
-        throw Exception('Email, password, and phone number are required.');
+      final credential = await _auth
+          .createUserWithEmailAndPassword(
+            email: email.trim(),
+            password: password.trim(),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      User? user = credential.user;
+      if (user != null) {
+        await user.updateDisplayName(name.trim());
+        await user.reload();
+
+        final freshUser = _auth.currentUser;
+        final profile = UserModel(
+          uid: freshUser!.uid,
+          name: name,
+          email: email,
+          role: role,
+        );
+
+        final userMap = profile.toJson();
+        userMap['phoneNumber'] = _normalizePhone(phoneNumber);
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(freshUser.uid)
+            .set(userMap, SetOptions(merge: true));
       }
+      return user;
+    } on FirebaseAuthException catch (e) {
+      throw Exception(_authErrorMessage(e));
+    } catch (e) {
+      debugPrint("Legacy Signup Error: $e");
+      rethrow;
+    }
+  }
 
+  // ✨ PRODUCTION SIGNUP FLOW: Trigger verifyPhoneNumber SMS OTP
+  Future<void> signUpWithPhoneOtp({
+    required String phoneNumber,
+    required Function(String verificationId) onCodeSent,
+    required Function(String error) onFailed,
+    RecaptchaVerifier? webVerifier,
+  }) async {
+    try {
+      final formattedPhone = _normalizePhone(phoneNumber);
+
+      if (kIsWeb) {
+        final verifier = RecaptchaVerifier(
+          auth: FirebaseAuthPlatform.instance,
+          container: 'recaptcha-container',
+          size: RecaptchaVerifierSize.compact,
+        );
+        _webConfirmationResult = await _auth.signInWithPhoneNumber(
+          formattedPhone,
+          verifier,
+        );
+        onCodeSent(_webConfirmationResult!.verificationId);
+      } else {
+        await _auth.verifyPhoneNumber(
+          phoneNumber: formattedPhone,
+          verificationCompleted: (PhoneAuthCredential credential) async {
+            // Auto-verification not handled here to enforce manual OTP UI flow
+          },
+          verificationFailed: (FirebaseAuthException e) {
+            onFailed(_authErrorMessage(e));
+          },
+          codeSent: (String verificationId, int? resendToken) {
+            onCodeSent(verificationId);
+          },
+          codeAutoRetrievalTimeout: (_) {},
+        );
+      }
+    } catch (e) {
+      onFailed(
+          e is FirebaseAuthException ? _authErrorMessage(e) : e.toString());
+    }
+  }
+
+  // ✨ COMPLETE SIGNUP: Verify SMS code and link/create account
+  Future<User?> verifyOtpAndCompleteSignup({
+    required String verificationId,
+    required String smsCode,
+    required String name,
+    required String email,
+    required String password,
+    String role = 'rider',
+  }) async {
+    try {
       User? currentUser = _auth.currentUser;
-      User? finalUser;
 
-      if (currentUser != null && currentUser.isAnonymous) {
-        debugPrint(
-            "🚀 AeroRide: Upgrading anonymous guest account to email account...");
-        AuthCredential credential = EmailAuthProvider.credential(
+      UserCredential? result;
+
+      if (kIsWeb && _webConfirmationResult != null) {
+        // For Web, we confirm the token directly through the stored ConfirmationResult
+        result = await _webConfirmationResult!.confirm(smsCode.trim());
+      } else if (currentUser != null && currentUser.isAnonymous) {
+        PhoneAuthCredential phoneCred = PhoneAuthProvider.credential(
+          verificationId: verificationId,
+          smsCode: smsCode.trim(),
+        );
+        await currentUser.linkWithCredential(phoneCred);
+
+        AuthCredential emailCred = EmailAuthProvider.credential(
           email: email.trim(),
           password: password.trim(),
         );
-
-        UserCredential result = await currentUser
-            .linkWithCredential(credential)
-            .timeout(const Duration(seconds: 15));
-        finalUser = result.user;
+        result = await currentUser.linkWithCredential(emailCred);
       } else {
-        UserCredential result = await _auth
+        PhoneAuthCredential phoneCred = PhoneAuthProvider.credential(
+          verificationId: verificationId,
+          smsCode: smsCode.trim(),
+        );
+        // New user: Create email account and update profile
+        result = await _auth
             .createUserWithEmailAndPassword(
               email: email.trim(),
               password: password.trim(),
             )
             .timeout(const Duration(seconds: 15));
-        finalUser = result.user;
+
+        // Link phone factor to the new account
+        await result.user?.linkWithCredential(phoneCred);
       }
 
+      User? finalUser = result?.user;
       if (finalUser != null) {
-        // Ensure the internal Firebase Auth profile has the name for UI display
         await finalUser.updateDisplayName(name.trim());
-        // Reload to ensure changes are reflected in the current object
         await finalUser.reload();
         finalUser = _auth.currentUser;
 
@@ -258,22 +364,14 @@ class AuthService {
           name: name,
           email: email,
           role: role,
-          // Note: Ensure your UserModel supports phoneNumber or pass it in the map
         );
-        try {
-          final userMap = upgradedUser.toJson();
-          userMap['phoneNumber'] = phoneNumber;
-          await FirebaseFirestore.instance
-              .collection('users')
-              .doc(finalUser.uid)
-              .set(userMap, SetOptions(merge: true));
-        } catch (error) {
-          if (_isNonFatalFirestoreError(error) || error is TimeoutException) {
-            debugPrint('Signup profile write tracking skipped: $error');
-          } else {
-            rethrow;
-          }
-        }
+
+        final userMap = upgradedUser.toJson();
+        userMap['phoneNumber'] = finalUser.phoneNumber;
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(finalUser.uid)
+            .set(userMap, SetOptions(merge: true));
       }
       return finalUser;
     } on TimeoutException {
@@ -308,24 +406,34 @@ class AuthService {
     }
   }
 
-  // 2. MODIFIED LOGIN (Catches specialized Multi-Factor exceptions)
-  Future<AeroRideLoginResult> login(String email, String password) async {
+  // ✨ UNIFIED LOGIN: Accept Email OR Phone Number
+  Future<AeroRideLoginResult> login(String identity, String password) async {
     try {
-      if (email.trim().isEmpty || password.trim().isEmpty) {
-        throw Exception('Email and password are required.');
+      String email = identity.trim();
+
+      // If input is a phone number, resolve the email from Firestore
+      if (!email.contains('@')) {
+        final formattedPhone = _normalizePhone(email);
+        final userQuery = await FirebaseFirestore.instance
+            .collection('users')
+            .where('phoneNumber', isEqualTo: formattedPhone)
+            .limit(1)
+            .get();
+
+        if (userQuery.docs.isEmpty) {
+          throw Exception('No account found for this phone number.');
+        }
+        email = userQuery.docs.first.get('email');
       }
 
       UserCredential result = await _auth
           .signInWithEmailAndPassword(
-            email: email.trim(),
+            email: email,
             password: password.trim(),
           )
           .timeout(const Duration(seconds: 15));
 
       return AeroRideLoginResult(user: result.user);
-    } on TimeoutException {
-      throw Exception(
-          'Login timed out. Please check your internet and try again.');
     } on FirebaseAuthMultiFactorException catch (e) {
       debugPrint(
           "🔒 AeroRide Identity Platform: Two-Step Challenge triggered.");
@@ -363,11 +471,14 @@ class AuthService {
             multiFactorInfo: selectedHint,
             verificationCompleted: (_) {},
             verificationFailed: (FirebaseAuthException error) {
-              if (!completer.isCompleted)
+              if (!completer.isCompleted) {
                 completer.completeError(Exception(_authErrorMessage(error)));
+              }
             },
             codeSent: (String verificationId, int? resendToken) {
-              if (!completer.isCompleted) completer.complete(verificationId);
+              if (!completer.isCompleted) {
+                completer.complete(verificationId);
+              }
             },
             codeAutoRetrievalTimeout: (_) {},
           )

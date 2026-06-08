@@ -1,4 +1,8 @@
 import 'dart:async';
+
+import 'package:aeroride/utils/web_helper_stub.dart'
+    if (dart.library.html) 'package:aeroride/utils/web_helper_web.dart'
+    as web_helper;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -24,6 +28,10 @@ void main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+
+  if (kIsWeb) {
+    web_helper.registerWebPlatformView();
+  }
 
   // Initialize notifications gracefully
   await _initNotifications();
@@ -64,84 +72,35 @@ class AuthWrapper extends StatefulWidget {
 }
 
 class _AuthWrapperState extends State<AuthWrapper> {
-  Future<DocumentSnapshot>? _profileFuture;
-  String? _cachedUid;
-
   @override
   Widget build(BuildContext context) {
     final authService = AuthService();
 
     return StreamBuilder<User?>(
-      stream: authService.authStateChanges,
-      builder: (context, authSnapshot) {
-        if (authSnapshot.connectionState == ConnectionState.waiting) {
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        // 1. Handle initial connection state
+        if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );
         }
 
-        // 👤 LAZY-AUTH ENGINE: If absolutely no active session is found in the stream,
-        // silently trigger background registration and show a clean loading state
-        if (!authSnapshot.hasData || authSnapshot.data == null) {
+        // 2. FRICTIONLESS LANDING: If no active session is found, trigger
+        // background anonymous sign-in and show a clean loading state.
+        if (!snapshot.hasData || snapshot.data == null) {
           authService.signInAnonymously();
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );
         }
 
-        final user = authSnapshot.data!;
-
-        if (_cachedUid != user.uid) {
-          _cachedUid = user.uid;
-          _profileFuture = FirebaseFirestore.instance
-              .collection('users')
-              .doc(user.uid)
-              .get()
-              .timeout(const Duration(seconds: 10));
-        }
-
-        return FutureBuilder<DocumentSnapshot>(
-          future: _profileFuture,
-          builder: (context, userSnapshot) {
-            if (userSnapshot.connectionState == ConnectionState.waiting) {
-              return const Scaffold(
-                body: Center(child: CircularProgressIndicator()),
-              );
-            }
-
-            if (userSnapshot.hasError) {
-              return Scaffold(
-                body: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Text(
-                      'Could not load profile: ${userSnapshot.error}',
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                ),
-              );
-            }
-
-            if (userSnapshot.hasData && userSnapshot.data!.exists) {
-              final userData =
-                  userSnapshot.data!.data() as Map<String, dynamic>;
-              final role = userData['role'] ?? 'rider';
-
-              if (role == 'driver') {
-                return _StableDashboardMapWrapper(
-                  child: driver_views.DriverDashboardView(user: user),
-                );
-              } else {
-                return _StableDashboardMapWrapper(
-                  child: rider_views.RiderDashboardView(user: user),
-                );
-              }
-            }
-
-            // Fallback for brand-new accounts if profile doc isn't written yet
-            return const RoleSelectionScreen();
-          },
+        // 3. Render the Dashboard for both Guest and Authenticated users
+        final user = snapshot.data!;
+        return _StableDashboardMapWrapper(
+          // Key ensures state (map coordinates) persists during Guest -> Registered transition
+          key: ValueKey('dashboard_${user.uid}'),
+          child: rider_views.RiderDashboardView(user: user),
         );
       },
     );
@@ -151,7 +110,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
 // ✅ RETAINED: State key tracker to eliminate multi-swap Web DOM caching crashes
 class _StableDashboardMapWrapper extends StatefulWidget {
   final Widget child;
-  const _StableDashboardMapWrapper({required this.child});
+  const _StableDashboardMapWrapper({super.key, required this.child});
 
   @override
   State<_StableDashboardMapWrapper> createState() =>

@@ -109,8 +109,28 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
   void initState() {
     super.initState();
     _rideController = Provider.of<RideController>(context, listen: false);
+
+    // Restore coordinates from RideController if they exist (preserves state after login/rebuild)
+    if (_rideController.pickupLocation != null) {
+      _riderLocation = _rideController.pickupLocation;
+    }
+    if (_rideController.destinationLocation != null) {
+      _destinationLocation = _rideController.destinationLocation;
+    }
+
     _rideControllerListener = () {
       if (mounted) {
+        // Sync local view state with the Controller's single source of truth
+        final status = _rideController.currentRideStatus;
+        if (status == 'ACCEPTED') {
+          setState(() => _currentRideState = RideState.driverEnRoute);
+        } else if (status == 'ARRIVED') {
+          setState(() => _currentRideState = RideState.driverArrived);
+        } else if (status == 'STARTED') {
+          setState(() => _currentRideState = RideState.inTransit);
+        } else if (status == 'COMPLETED') {
+          setState(() => _currentRideState = RideState.arrivedAtDestination);
+        }
         setState(() {});
       }
     };
@@ -784,79 +804,23 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       _currentRideState = RideState.requesting;
     });
 
-    final fareToSave = _calculatedFareKsh > 0
-        ? _calculatedFareKsh
-        : computeFareAndEarnings(
-            _calculateHaversineDistance(_riderLocation!, _destinationLocation!),
-            0.0,
-          ).passengerFare;
-
-    final rideRequestRef =
-        FirebaseFirestore.instance.collection('ride_requests').doc();
-    _currentRideDocumentId = rideRequestRef.id;
-
-    // Use FirebaseAuth instance directly to guarantee we pull the post-upgrade values!
+    // CRITICAL: Pull the fresh UID from Auth instance to avoid permission-denied
+    // errors when the user has just upgraded from a guest account.
     final freshUser = FirebaseAuth.instance.currentUser;
-    final userUid = freshUser?.uid ?? widget.user.uid;
-    final userName = freshUser?.displayName ?? 'AeroRide User';
+    final currentUid = freshUser?.uid ?? widget.user.uid;
 
-    final rideData = <String, dynamic>{
-      'id': rideRequestRef.id,
-      'userId': userUid,
-      'riderId': userUid,
-      'riderName': userName,
-      'pickup': GeoPoint(_riderLocation!.latitude, _riderLocation!.longitude),
-      'pickupLocation':
-          GeoPoint(_riderLocation!.latitude, _riderLocation!.longitude),
-      'dropoff': GeoPoint(
-          _destinationLocation!.latitude, _destinationLocation!.longitude),
-      'destinationLocation': GeoPoint(
-          _destinationLocation!.latitude, _destinationLocation!.longitude),
-      'pickupAddress': _pickupAddressString,
-      'destinationName': _destinationAddressString,
-      'destinationAddress': _destinationAddressString,
-      'status': 'searching',
-      'estimatedCost': fareToSave,
-      'finalFareCharged': fareToSave,
-      'candidateDrivers': selectedDriverId.isNotEmpty ? [selectedDriverId] : [],
-      'preferredDriverId':
-          selectedDriverId.isNotEmpty ? selectedDriverId : null,
-      'createdAt': FieldValue.serverTimestamp(),
-    };
-
-    final rideSearchData = <String, dynamic>{
-      ...rideData,
-      'driverId': null,
-    };
-
-    final rideFinalData = <String, dynamic>{
-      ...rideData,
-      'driverId': null,
-      'pickupGeo':
-          GeoPoint(_riderLocation!.latitude, _riderLocation!.longitude),
-      'dropoffGeo': GeoPoint(
-          _destinationLocation!.latitude, _destinationLocation!.longitude),
-      'currentVehicleLocation':
-          GeoPoint(driverLocation.latitude, driverLocation.longitude),
-      'driverEarnings': 0,
-    };
-
-    try {
-      final batch = FirebaseFirestore.instance.batch();
-      batch.set(rideRequestRef, rideSearchData);
-      batch.set(
-        FirebaseFirestore.instance.collection('rides').doc(rideRequestRef.id),
-        rideFinalData,
-      );
-      await batch.commit();
-    } catch (error) {
-      debugPrint('RiderDashboardView: ride write failed: $error');
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ride request failed: $error')),
-      );
-      return;
-    }
+    // DELEGATE TO CONTROLLER: This uses FirestoreService which has proper
+    // transaction logic and solves the [permission-denied] batch error.
+    await _rideController.requestNewRide(
+      userId: currentUid,
+      riderName: freshUser?.displayName ?? 'Rider',
+      pickup: _riderLocation!,
+      destination: _destinationLocation!,
+      pickupText: _pickupAddressString,
+      dropoffText: _destinationAddressString,
+      candidateDriverIds: [selectedDriverId],
+      autoAssignDriver: true, // For simulation/testing
+    );
 
     Timer(const Duration(seconds: 2), () async {
       if (!mounted) return;
@@ -1373,9 +1337,9 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                       radius: 24,
                       backgroundColor: context.aeroTokens.primaryDarkBlue,
                       child: Text(
-                        (widget.user.displayName?.isNotEmpty ?? false)
-                            ? widget.user.displayName![0].toUpperCase()
-                            : 'R',
+                        (widget.user.displayName?.trim().isNotEmpty ?? false)
+                            ? widget.user.displayName!.trim()[0].toUpperCase()
+                            : 'A',
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w800,
@@ -1388,7 +1352,10 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            widget.user.displayName ?? 'Rider',
+                            (widget.user.displayName?.trim().isNotEmpty ??
+                                    false)
+                                ? widget.user.displayName!.trim()
+                                : 'AeroRide User',
                             style: const TextStyle(
                               fontWeight: FontWeight.w800,
                               fontSize: 16,
@@ -1459,10 +1426,9 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                       radius: 26,
                       backgroundColor: Colors.grey.shade100,
                       child: Text(
-                        widget.user.displayName
-                                ?.substring(0, 1)
-                                .toUpperCase() ??
-                            'R',
+                        (widget.user.displayName?.trim().isNotEmpty ?? false)
+                            ? widget.user.displayName!.trim()[0].toUpperCase()
+                            : 'A',
                         style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
@@ -1476,7 +1442,10 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            widget.user.displayName ?? 'AeroRide Rider',
+                            (widget.user.displayName?.trim().isNotEmpty ??
+                                    false)
+                                ? widget.user.displayName!.trim()
+                                : 'AeroRide User',
                             style: const TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
@@ -1704,12 +1673,12 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                             radius: 22,
                             backgroundColor: Colors.black,
                             child: Text(
-                              widget.user.displayName != null &&
-                                      widget.user.displayName!.isNotEmpty
+                              (widget.user.displayName?.trim().isNotEmpty ??
+                                      false)
                                   ? widget.user.displayName!
-                                      .substring(0, 1)
+                                      .trim()[0]
                                       .toUpperCase()
-                                  : 'R',
+                                  : 'A',
                               style: const TextStyle(
                                   color: Colors.white,
                                   fontWeight: FontWeight.bold,
@@ -2170,6 +2139,11 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
     bool isSignUpMode = true;
     bool isProcessingAuth = false;
+    bool isWaitingForSignupOtp = false; // Corrected variable name
+    String currentVerificationId = '';
+
+    int resendCountdown = 0;
+    Timer? countdownTimer;
 
     // Multi-Factor UI Tracking Toggles
     bool isMfaChallengeActive = false;
@@ -2180,6 +2154,20 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
     final AuthService authService = AuthService();
 
     // Universally stable helper utility to trigger Google Sign In across Mobile & Web
+    void startCountdown(Function setDialogState) {
+      setDialogState(() => resendCountdown = 60);
+      countdownTimer?.cancel();
+      countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        setDialogState(() {
+          if (resendCountdown > 0) {
+            resendCountdown--;
+          } else {
+            timer.cancel();
+          }
+        });
+      });
+    }
+
     Future<void> _handleGoogleAuth(Function setDialogState) async {
       setDialogState(() => isProcessingAuth = true);
       try {
@@ -2253,6 +2241,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
         // Successfully authenticated! Dismiss auth dialog and complete booking.
         if (context.mounted) Navigator.pop(context);
 
+        final freshUser = FirebaseAuth.instance.currentUser;
         final driverIdStr = _selectedDriver?['id']?.toString() ?? '';
         await _executeActualRideBooking(
             _selectedDriver!, _driverLocation!, driverIdStr);
@@ -2361,6 +2350,48 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                               prefixIcon: const Icon(Icons.sms_outlined),
                               border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12)),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Center(
+                            child: TextButton(
+                              onPressed: (resendCountdown > 0 ||
+                                      isProcessingAuth)
+                                  ? null
+                                  : () async {
+                                      setDialogState(
+                                          () => isProcessingAuth = true);
+
+                                      await authService.signUpWithPhoneOtp(
+                                        phoneNumber:
+                                            phoneController.text.trim(),
+                                        onCodeSent: (verId) {
+                                          setDialogState(() {
+                                            currentVerificationId = verId;
+                                            isProcessingAuth = false;
+                                          });
+                                          startCountdown(setDialogState);
+                                        },
+                                        onFailed: (err) {
+                                          setDialogState(
+                                              () => isProcessingAuth = false);
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                                  SnackBar(content: Text(err)));
+                                        },
+                                      );
+                                    },
+                              child: Text(
+                                resendCountdown > 0
+                                    ? 'Resend code in ${resendCountdown}s'
+                                    : 'Resend SMS Code',
+                                style: TextStyle(
+                                  color: resendCountdown > 0
+                                      ? Colors.grey
+                                      : Colors.blueAccent,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
                             ),
                           ),
                           const SizedBox(height: 20),
@@ -2556,28 +2587,45 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                             const SizedBox(height: 12),
                           ],
 
-                          TextField(
-                            controller: emailController,
-                            keyboardType: TextInputType.emailAddress,
-                            decoration: InputDecoration(
-                              labelText: 'Email Address',
-                              prefixIcon: const Icon(Icons.mail_outline),
-                              border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12)),
+                          if (isWaitingForSignupOtp) ...[
+                            // Use the correct state variable
+                            const Text('Verify Your Phone 📱',
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold, fontSize: 18)),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: mfaSmsController,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                labelText: 'Enter 6-Digit SMS Code',
+                                prefixIcon: Icon(Icons.sms_outlined),
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 12),
-
-                          TextField(
-                            controller: passwordController,
-                            obscureText: true,
-                            decoration: InputDecoration(
-                              labelText: 'Password',
-                              prefixIcon: const Icon(Icons.lock_outline),
-                              border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12)),
+                            const SizedBox(height: 20),
+                          ] else ...[
+                            TextField(
+                              controller: emailController,
+                              decoration: InputDecoration(
+                                labelText: localIsSignUpMode
+                                    ? 'Email Address'
+                                    : 'Email or Phone Number',
+                                prefixIcon: const Icon(Icons.mail_outline),
+                                border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
                             ),
-                          ),
+                            const SizedBox(height: 12),
+                            TextField(
+                              controller: passwordController,
+                              obscureText: true,
+                              decoration: InputDecoration(
+                                labelText: 'Password',
+                                prefixIcon: const Icon(Icons.lock_outline),
+                                border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 20),
 
                           ElevatedButton(
@@ -2587,7 +2635,8 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                               shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(12)),
                             ),
-                            onPressed: localIsProcessingAuth
+                            onPressed: (localIsProcessingAuth ||
+                                    isProcessingAuth)
                                 ? null
                                 : () async {
                                     final email = emailController.text.trim();
@@ -2596,39 +2645,61 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                                     final name = nameController.text.trim();
                                     final phone = phoneController.text.trim();
 
-                                    if (email.isEmpty ||
-                                        password.isEmpty ||
-                                        (localIsSignUpMode &&
-                                            (name.isEmpty || phone.isEmpty))) {
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                        const SnackBar(
-                                            content: Text(
-                                                'Please fill in all fields')),
-                                      );
-                                      return;
-                                    }
-
-                                    setDialogState(
-                                        () => localIsProcessingAuth = true);
-
-                                    try {
-                                      if (localIsSignUpMode) {
-                                        await authService.signUp(
-                                            name, email, password, "rider",
-                                            phoneNumber: phone);
-
-                                        if (context.mounted) {
+                                    // 1. Handle OTP Verification Leg
+                                    if (isWaitingForSignupOtp) {
+                                      setDialogState(
+                                          () => isProcessingAuth = true);
+                                      try {
+                                        await authService
+                                            .verifyOtpAndCompleteSignup(
+                                          verificationId: currentVerificationId,
+                                          smsCode: mfaSmsController.text,
+                                          name: name,
+                                          email: email,
+                                          password: password,
+                                        );
+                                        if (context.mounted)
                                           Navigator.pop(dialogContext);
-                                        }
-                                        final driverIdStr =
-                                            _selectedDriver?['id']
-                                                    ?.toString() ??
-                                                '';
                                         await _executeActualRideBooking(
                                             _selectedDriver!,
                                             _driverLocation!,
-                                            driverIdStr);
+                                            _selectedDriver?['id'] ?? '');
+                                      } catch (e) {
+                                        setDialogState(
+                                            () => isProcessingAuth = false);
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(SnackBar(
+                                                content: Text(e.toString())));
+                                      }
+                                      return;
+                                    }
+
+                                    // 2. Handle Initial Auth Leg
+                                    if (email.isEmpty || password.isEmpty)
+                                      return;
+
+                                    setDialogState(
+                                        () => localIsProcessingAuth = true);
+                                    try {
+                                      if (localIsSignUpMode) {
+                                        await authService.signUpWithPhoneOtp(
+                                          phoneNumber: phone,
+                                          onCodeSent: (verId) {
+                                            setDialogState(() {
+                                              currentVerificationId = verId;
+                                              isWaitingForSignupOtp = true;
+                                              localIsProcessingAuth = false;
+                                            });
+                                            startCountdown(setDialogState);
+                                          },
+                                          onFailed: (err) {
+                                            setDialogState(() =>
+                                                localIsProcessingAuth = false);
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(SnackBar(
+                                                    content: Text(err)));
+                                          },
+                                        );
                                       } else {
                                         dynamic loginResult = await authService
                                             .login(email, password);

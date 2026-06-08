@@ -12,6 +12,43 @@ class SimulationService {
   static final Map<String, Timer> _movementTimers = {};
   static const String _simulatedDriversCollection = 'simulatedDrivers';
 
+  /// Prepares specified drivers for simulation by setting active status and location.
+  static Future<void> prepareDriversForSimulation(
+    List<String> ids,
+    LatLng location,
+  ) async {
+    final rnd = Random();
+    for (final id in ids) {
+      // Offset position slightly so driver doesn't spawn exactly on the rider
+      final latOffset = (rnd.nextDouble() - 0.5) * 0.005;
+      final lonOffset = (rnd.nextDouble() - 0.5) * 0.005;
+      final geo = GeoPoint(
+          location.latitude + latOffset, location.longitude + lonOffset);
+
+      final update = {
+        'isOnline': true,
+        'hasLocation': true,
+        'status': 'available',
+        'current_location': geo,
+        'currentLocation': geo, // Camel case for mobile consistency
+        'location': geo, // Legacy field support
+        'updatedAt': Timestamp.now(),
+      };
+
+      // Update simulation registry
+      await _db
+          .collection(_simulatedDriversCollection)
+          .doc(id)
+          .set(update, SetOptions(merge: true));
+
+      // Synchronize to the primary users collection for matcher visibility
+      await _db
+          .collection('users')
+          .doc(id)
+          .set(update, SetOptions(merge: true));
+    }
+  }
+
   // Create simple simulated drivers around `center` and start moving them slowly.
   // Returns the created driver ids.
   static Future<List<String>> seedMockDrivers(
@@ -43,7 +80,10 @@ class SimulationService {
         'vehicleColor': ['Blue', 'White', 'Silver'][i % 3],
         'rating': 4.7 + (i % 3) * 0.1,
         'current_location': GeoPoint(lat, lng),
+        'location': GeoPoint(lat, lng),
         'isOnline': true,
+        'hasLocation': true,
+        'status': 'available',
         'updatedAt': Timestamp.now(),
       });
 
@@ -69,6 +109,8 @@ class SimulationService {
         await _db.collection(_simulatedDriversCollection).doc(id).set({
           'current_location': GeoPoint(pos.latitude, pos.longitude),
           'isOnline': true,
+          'hasLocation': true,
+          'status': 'available',
           'updatedAt': Timestamp.now(),
         }, SetOptions(merge: true));
         // Mirror to users collection so driver app subscriptions receive updates
@@ -77,6 +119,8 @@ class SimulationService {
             'currentLocation': GeoPoint(pos.latitude, pos.longitude),
             'current_location': GeoPoint(pos.latitude, pos.longitude),
             'isOnline': true,
+            'hasLocation': true,
+            'status': 'available',
             'updatedAt': Timestamp.now(),
           }, SetOptions(merge: true));
         } catch (_) {}
@@ -245,27 +289,6 @@ class SimulationService {
           if (waitingCounter == 0) {
             waitingCounter =
                 1; // Mark as waiting to prevent multiple triggers during the 7s delay
-
-            // Trigger Security OTP SMS simulation via Firebase Auth
-            try {
-              final rideDoc = await _db.collection('rides').doc(rideId).get();
-              final riderId = rideDoc.data()?['userId'];
-              if (riderId != null) {
-                final userDoc =
-                    await _db.collection('users').doc(riderId).get();
-                String? phoneNumber = userDoc.data()?['phoneNumber'];
-
-                if (phoneNumber != null && phoneNumber.isNotEmpty) {
-                  debugPrint(
-                      'SimulationService: Sending Security OTP to $phoneNumber');
-                  await FirebaseAuth.instance
-                      .signInWithPhoneNumber(phoneNumber);
-                }
-              }
-            } catch (e) {
-              debugPrint('SimulationService: OTP SMS simulation failed: $e');
-            }
-
             await Future.delayed(const Duration(seconds: 7));
             await _db.collection('rides').doc(rideId).update({
               'status': 'started',

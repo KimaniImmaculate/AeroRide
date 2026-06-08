@@ -34,10 +34,11 @@
 
   <!-- Google Maps Web Integration -->
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyANuwPwm1dRFvh_ySIIiW22-dWnUsMrp0k&loading=async"></script>
+  <script src="https://www.google.com/recaptcha/api.js" async defer></script>
   <script src="directions.js"></script>
 </head>
 <body>
-  <!--
+<div id="recaptcha-container" style="width: 100px; height: 100px; position: absolute; bottom: 0; right: 0; z-index: -999; opacity: 0;"></div>  <!--
     You can customize the "flutter_bootstrap.js" script.
     This is useful to provide a custom configuration to the Flutter loader
     or to give the user feedback during the initialization process.
