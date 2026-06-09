@@ -34,7 +34,6 @@ class RideController extends ChangeNotifier {
   String currentRideStatus = "IDLE";
   String? activeRideId;
 
-  // Arrival callback for UI to show notifications
   void Function(String driverName, String vehicleInfo)? onDriverArrived;
 
   // Active locations and assigned profile
@@ -280,7 +279,9 @@ class RideController extends ChangeNotifier {
           // In simulation mode, treat any assigned driver as a simulation candidate
           final isSimulated = kDebugMode;
 
-          if (isSimulated && (currentRideStatus == 'ACCEPTED' || currentRideStatus == 'STARTED')) {
+          if (isSimulated &&
+              (currentRideStatus == 'ACCEPTED' ||
+                  currentRideStatus == 'STARTED')) {
             SimulationService.simulateRideLifecycle(
               rideId: rideId,
               driverId: driverId,
