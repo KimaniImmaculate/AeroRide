@@ -280,7 +280,7 @@ class RideController extends ChangeNotifier {
           // In simulation mode, treat any assigned driver as a simulation candidate
           final isSimulated = kDebugMode;
 
-          if (isSimulated && currentRideStatus == 'ACCEPTED') {
+          if (isSimulated && (currentRideStatus == 'ACCEPTED' || currentRideStatus == 'STARTED')) {
             SimulationService.simulateRideLifecycle(
               rideId: rideId,
               driverId: driverId,

@@ -68,6 +68,12 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
   LatLng? _riderLocation;
   LatLng? _destinationLocation;
   LatLng? _driverLocation;
+  UserModel? _currentUserModel;
+  bool _isProcessingPinInput = false;
+
+  bool isArrived = false;
+  bool isTripStarted = false;
+  String _currentRideStatus = "idle";
 
   // Map Pick Toggles
   bool _isPickingFromMap = false;
@@ -120,24 +126,77 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
     _rideControllerListener = () {
       if (mounted) {
-        // Sync local view state with the Controller's single source of truth
-        final status = _rideController.currentRideStatus;
-        if (status == 'ACCEPTED') {
-          setState(() => _currentRideState = RideState.driverEnRoute);
-        } else if (status == 'ARRIVED') {
-          setState(() => _currentRideState = RideState.driverArrived);
-        } else if (status == 'STARTED') {
-          setState(() => _currentRideState = RideState.inTransit);
-        } else if (status == 'COMPLETED') {
-          setState(() => _currentRideState = RideState.arrivedAtDestination);
-        }
-        setState(() {});
+        if (_isProcessingPinInput)
+          return; // Completely ignores database noise during the 7 seconds!
+        final rawStatus = _rideController.currentRideStatus.toLowerCase();
+        _currentRideDocumentId = _rideController.activeRideId;
+
+        setState(() {
+          // Update Real-Time Driver Tracking first
+          if (_rideController.driverLocation != null) {
+            _driverLocation = _rideController.driverLocation;
+            if (rawStatus == 'accepted' ||
+                rawStatus == 'enroute' ||
+                rawStatus == 'started' ||
+                rawStatus == 'intransit') {
+              _mapController?.animateCamera(
+                CameraUpdate.newLatLng(_driverLocation!),
+              );
+            }
+          }
+
+          // 1. LOCAL LOCK: Once we reach 'Arrived' (OTP phase), ignore backward 'enroute' noise
+          if (isArrived &&
+              (rawStatus == 'driver_enroute_pickup' ||
+                  rawStatus == 'enroute' ||
+                  rawStatus == 'accepted')) {
+            _currentRideStatus = 'arrived';
+            _currentRideState = RideState.driverArrived;
+            return;
+          }
+
+          // 2. Normal Progression Mapping
+          if (rawStatus == 'driver_arrived_pickup' || rawStatus == 'arrived') {
+            _currentRideStatus = 'arrived';
+            _currentRideState = RideState.driverArrived;
+            isArrived = true;
+            isTripStarted = false;
+            _etaMinutes = 0;
+          } else if (rawStatus == 'started' ||
+              rawStatus == 'intransit' ||
+              isTripStarted == true) {
+            _currentRideStatus = 'started';
+            _currentRideState = RideState.inTransit;
+            isArrived = false;
+            isTripStarted = true;
+          } else if (rawStatus == 'completed') {
+            _currentRideStatus = 'completed';
+            _currentRideState = RideState.arrivedAtDestination;
+            isArrived = false;
+            isTripStarted = true;
+          } else {
+            // Handle early states (Searching, Accepted, etc)
+            _currentRideStatus = rawStatus;
+            if (rawStatus == 'accepted' ||
+                rawStatus == 'enroute' ||
+                rawStatus == 'driver_enroute_pickup') {
+              _currentRideState = RideState.driverEnRoute;
+              isArrived = false;
+              isTripStarted = false;
+            } else if (rawStatus == 'searching') {
+              _currentRideState = RideState.requesting;
+            } else if (rawStatus == 'idle') {
+              _currentRideState = RideState.idle;
+            }
+          }
+        });
       }
     };
     _rideController.addListener(_rideControllerListener!);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       unawaited(_rideController.startRiderLocationTracking());
+      _fetchUserProfile();
     });
     _rideController.loadRideTypes();
 
@@ -162,6 +221,15 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
         _etaMinutes = 0;
       });
     };
+  }
+
+  Future<void> _fetchUserProfile() async {
+    try {
+      final profile = await _firestoreService.getUserProfile(widget.user.uid);
+      if (mounted) setState(() => _currentUserModel = profile);
+    } catch (e) {
+      debugPrint('RiderDashboard: Failed to fetch profile: $e');
+    }
   }
 
   @override
@@ -788,9 +856,6 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       return; // Stop right here! Do not execute database pushes yet.
     }
 
-    // Verified users: Advance straight into processing data
-    debugPrint(
-        "DEBUG: Authenticated user detected (${currentUser.uid}). Booking ride directly...");
     await _executeActualRideBooking(driver, driverLocation, selectedDriverId);
   }
 
@@ -824,22 +889,44 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
     Timer(const Duration(seconds: 2), () async {
       if (!mounted) return;
-      setState(() {
-        _currentRideState = RideState.driverEnRoute;
-      });
-
       await _fetchRoadRouteForPhase(_driverLocation!, _riderLocation!);
       _startProgressiveInTransitSimulation(TravelPhase.driverToRider);
     });
   }
 
   Future<void> _startTripTransit() async {
-    if (!mounted || _riderLocation == null || _destinationLocation == null) {
+    if (!mounted || _currentRideDocumentId == null) {
       return;
     }
 
-    await _fetchRoadRouteForPhase(_riderLocation!, _destinationLocation!);
-    _startProgressiveInTransitSimulation(TravelPhase.riderToDestination);
+    setState(() {
+      _isProcessingPinInput = true;
+      // Explicitly set the status so the UI shows a stable transition state
+      _currentRideStatus = 'processing_pin';
+    });
+
+    // Wait 7 seconds to assume the driver is inputting the PIN
+    await Future.delayed(const Duration(seconds: 7));
+
+    // MANUAL SIGNAL: Update Firestore to 'started'.
+    // This triggers SimulationService to begin Leg 3 and the Taximeter to show.
+    await FirebaseFirestore.instance
+        .collection('rides')
+        .doc(_currentRideDocumentId)
+        .update({
+      'status': 'started',
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (mounted) {
+      setState(() {
+        _isProcessingPinInput = false;
+        _currentRideState = RideState.inTransit;
+        isArrived = false;
+        _currentRideStatus = 'started';
+        isTripStarted = true;
+      });
+    }
   }
 
   Future<void> _completeRidePayment() async {
@@ -1337,9 +1424,10 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                       radius: 24,
                       backgroundColor: context.aeroTokens.primaryDarkBlue,
                       child: Text(
-                        (widget.user.displayName?.trim().isNotEmpty ?? false)
-                            ? widget.user.displayName!.trim()[0].toUpperCase()
-                            : 'A',
+                        (_currentUserModel?.name ??
+                                widget.user.displayName ??
+                                'A')[0]
+                            .toUpperCase(),
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w800,
@@ -1352,10 +1440,9 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            (widget.user.displayName?.trim().isNotEmpty ??
-                                    false)
-                                ? widget.user.displayName!.trim()
-                                : 'AeroRide User',
+                            _currentUserModel?.name ??
+                                widget.user.displayName ??
+                                'AeroRide User',
                             style: const TextStyle(
                               fontWeight: FontWeight.w800,
                               fontSize: 16,
@@ -1426,9 +1513,10 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                       radius: 26,
                       backgroundColor: Colors.grey.shade100,
                       child: Text(
-                        (widget.user.displayName?.trim().isNotEmpty ?? false)
-                            ? widget.user.displayName!.trim()[0].toUpperCase()
-                            : 'A',
+                        (_currentUserModel?.name ??
+                                widget.user.displayName ??
+                                'A')[0]
+                            .toUpperCase(),
                         style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
@@ -1442,10 +1530,9 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            (widget.user.displayName?.trim().isNotEmpty ??
-                                    false)
-                                ? widget.user.displayName!.trim()
-                                : 'AeroRide User',
+                            _currentUserModel?.name ??
+                                widget.user.displayName ??
+                                'AeroRide User',
                             style: const TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
@@ -1673,12 +1760,10 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                             radius: 22,
                             backgroundColor: Colors.black,
                             child: Text(
-                              (widget.user.displayName?.trim().isNotEmpty ??
-                                      false)
-                                  ? widget.user.displayName!
-                                      .trim()[0]
-                                      .toUpperCase()
-                                  : 'A',
+                              (_currentUserModel?.name ??
+                                      widget.user.displayName ??
+                                      'A')[0]
+                                  .toUpperCase(),
                               style: const TextStyle(
                                   color: Colors.white,
                                   fontWeight: FontWeight.bold,
@@ -1719,6 +1804,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
   }
 
   Widget _buildPanelContent() {
+    // EXCLUSIVE UI MAPPING: Enforce one layout at a time
     switch (_currentRideState) {
       case RideState.idle:
       case RideState.searchingAddresses:
@@ -1917,6 +2003,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Only show Taximeter when driver is en route or in transit
             _buildLiveTaximeterDock(),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1997,13 +2084,17 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
             ),
             const SizedBox(height: 16),
             ElevatedButton(
-              onPressed: _startTripTransit,
+              onPressed: _isProcessingPinInput ? null : _startTripTransit,
               style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.green,
                   padding: const EdgeInsets.symmetric(vertical: 14)),
-              child: const Text('Start Trip Transit',
-                  style: TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.bold)),
+              child: Text(
+                _isProcessingPinInput
+                    ? 'Processing PIN...'
+                    : 'Start Trip Transit',
+                style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.bold),
+              ),
             ),
           ],
         );
@@ -2120,6 +2211,121 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                     color: Colors.white, fontWeight: FontWeight.bold),
               ),
             ),
+          ],
+        );
+      default: // Fallback for any unhandled states, or initial idle/searching
+        if (_isPickingFromMap) {
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.location_on,
+                  size: 40,
+                  color: _mapPinTarget == 'pickup' ? Colors.blue : Colors.red),
+              const SizedBox(height: 8),
+              Text(
+                "Click anywhere on the map to place your $_mapPinTarget pin...",
+                textAlign: TextAlign.center,
+                style:
+                    const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: () => setState(() => _isPickingFromMap = false),
+                child: const Text("Cancel Map Pinning",
+                    style: TextStyle(
+                        color: Colors.redAccent, fontWeight: FontWeight.bold)),
+              )
+            ],
+          );
+        }
+
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text('Where to?',
+                style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 22,
+                    letterSpacing: -0.5)),
+            const SizedBox(height: 16),
+
+            // Pickup Input Layer
+            TextField(
+              controller: _pickupTextController,
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.circle,
+                    size: 12, color: Colors.blueAccent),
+                hintText: 'Enter Pickup or Click Map Icon',
+                suffixIcon: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.map,
+                          size: 18, color: Colors.blueAccent),
+                      tooltip: "Pick on Map",
+                      onPressed: () {
+                        _clearExistingRoute();
+                        setState(() {
+                          _isPickingFromMap = true;
+                          _mapPinTarget = 'pickup';
+                        });
+                      },
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.my_location,
+                          size: 18, color: Colors.grey),
+                      onPressed: _useCurrentLocation,
+                    ),
+                  ],
+                ),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                contentPadding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+            ),
+            const SizedBox(height: 10),
+
+            // Destination Input Layer
+            TextField(
+              controller: _destinationTextController,
+              decoration: InputDecoration(
+                prefixIcon:
+                    const Icon(Icons.square, size: 12, color: Colors.black),
+                hintText: 'Where are we dropping off?',
+                suffixIcon: IconButton(
+                  icon:
+                      const Icon(Icons.map, size: 18, color: Colors.redAccent),
+                  tooltip: "Pick on Map",
+                  onPressed: () {
+                    _clearExistingRoute();
+                    setState(() {
+                      _isPickingFromMap = true;
+                      _mapPinTarget = 'destination';
+                    });
+                  },
+                ),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                contentPadding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            ElevatedButton(
+              onPressed: _geocodeAndRouteAddresses,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              child: const Text('Search Route & Prices',
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+            const SizedBox(height: 18),
+            _buildSuggestedDestinationsSection(),
           ],
         );
     }

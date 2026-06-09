@@ -223,9 +223,12 @@ class SimulationService {
       steps: 15,
     );
 
+    final rideSnap = await _db.collection('rides').doc(rideId).get();
+    final status = rideSnap.data()?['status'] ?? '';
+
     int step = 0;
-    int leg =
-        1; // 1: moving to pickup, 2: waiting at pickup, 3: moving to destination, 4: completed
+    // 1: moving to pickup, 3: moving to destination (2: waiting is now handled by UI)
+    int leg = (status == 'started' || status == 'inTransit') ? 3 : 1;
     int waitingCounter = 0;
 
     _rideSimulationTimer = Timer.periodic(const Duration(seconds: 1), (
@@ -283,20 +286,13 @@ class SimulationService {
             leg = 2;
             waitingCounter = 0;
             debugPrint('SimulationService: Driver arrived at pickup.');
-          }
-        } else if (leg == 2) {
-          // Leg 2: Waiting at pickup (representing rider boarding)
-          if (waitingCounter == 0) {
-            waitingCounter =
-                1; // Mark as waiting to prevent multiple triggers during the 7s delay
-            await Future.delayed(const Duration(seconds: 7));
-            await _db.collection('rides').doc(rideId).update({
-              'status': 'started',
-            });
-            leg = 3;
-            step = 0;
-            debugPrint(
-                'SimulationService: Security OTP handoff validated. Trip started.');
+            _currentSimulatedRideId =
+                null; // Clear lock to allow restart for the destination leg
+
+            // CRITICAL FIX: Stop the simulation here.
+            // The trip only resumes when the rider validates OTP in the UI.
+            timer.cancel();
+            _rideSimulationTimer = null;
           }
         } else if (leg == 3) {
           // Leg 3: Moving to destination
