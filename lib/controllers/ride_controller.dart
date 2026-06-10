@@ -13,6 +13,7 @@ import 'package:aeroride/services/firestore_service.dart';
 import 'package:aeroride/services/drivers_service.dart';
 import 'package:aeroride/services/simulation_service.dart';
 import 'package:aeroride/models/user_model.dart';
+import 'package:aeroride/models/vehicle_tier_model.dart';
 import 'package:aeroride/models/ride_type_model.dart';
 import 'package:aeroride/services/notification_service.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -55,6 +56,19 @@ class RideController extends ChangeNotifier {
   List<RideTypeModel> availableRideTypes = [];
   RideTypeModel? selectedRideType;
   String? selectedRideTypeId;
+
+  // Vehicle Tier logic
+  List<VehicleTier> vehicleTiers = [];
+  VehicleTier? _selectedTier;
+
+  VehicleTier? get selectedTier => _selectedTier;
+
+  set selectedTier(VehicleTier? tier) {
+    if (_selectedTier != tier) {
+      _selectedTier = tier;
+      notifyListeners();
+    }
+  }
 
   // Nearby driver previews shown while waiting for assignment.
   List<Map<String, dynamic>> nearbyDriverPreviews = [];
@@ -874,6 +888,38 @@ class RideController extends ChangeNotifier {
 
   Future<void> loadRideTypes() async {
     try {
+      // Seed standard tiers (In production, load these from Firestore)
+      vehicleTiers = [
+        VehicleTier(
+          id: 'standard',
+          name: 'Standard',
+          description: 'Affordable, everyday rides',
+          baseFare: 150.0,
+          perKmRate: 45.0,
+          capacity: 4,
+          benefits: ['Budget friendly', 'Top-rated drivers'],
+        ),
+        VehicleTier(
+          id: 'premium',
+          name: 'Premium',
+          description: 'Luxury sedans with top chauffeurs',
+          baseFare: 350.0,
+          perKmRate: 85.0,
+          capacity: 4,
+          benefits: ['Luxury vehicles', 'Extra legroom'],
+        ),
+        VehicleTier(
+          id: 'xl',
+          name: 'Executive XL',
+          description: 'Spacious SUVs for groups',
+          baseFare: 500.0,
+          perKmRate: 110.0,
+          capacity: 6,
+          benefits: ['Fits up to 6', 'Great for luggage'],
+        ),
+      ];
+      selectedTier = vehicleTiers.first;
+
       availableRideTypes = await _firestoreService.getRideTypes();
       if (availableRideTypes.isNotEmpty && selectedRideType == null) {
         selectedRideType = availableRideTypes.first;

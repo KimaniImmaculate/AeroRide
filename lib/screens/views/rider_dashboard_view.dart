@@ -12,7 +12,6 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
-import 'package:aeroride/services/auth_service.dart';
 import '../../utils/fare_calculator.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 
@@ -21,6 +20,7 @@ import '../../models/ride_request_model.dart';
 import '../../models/ride_type_model.dart';
 import '../../models/user_model.dart';
 import '../../services/firestore_service.dart';
+import '../../services/auth_service.dart';
 import '../../services/drivers_service.dart';
 import '../../services/mock_route_service.dart';
 import '../../services/mpesa_service.dart';
@@ -33,6 +33,8 @@ import 'directions_route_provider.dart';
 import 'wallet_view.dart';
 import '../role_selection_screen.dart';
 
+enum DashboardStage { searching, rideActive }
+
 enum RideState {
   idle,
   searchingAddresses,
@@ -42,7 +44,7 @@ enum RideState {
   driverArrived,
   inTransit,
   arrivedAtDestination,
-  payment
+  payment,
 }
 
 enum TravelPhase { driverToRider, riderToDestination }
@@ -65,6 +67,8 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
   // Real-time Core Lifecycle States
   RideState _currentRideState = RideState.idle;
+  DashboardStage _dashboardStage =
+      DashboardStage.searching; // Start directly in searching
   LatLng? _riderLocation;
   LatLng? _destinationLocation;
   LatLng? _driverLocation;
@@ -198,7 +202,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       unawaited(_rideController.startRiderLocationTracking());
       _fetchUserProfile();
     });
-    _rideController.loadRideTypes();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _rideController.loadRideTypes());
 
     final dynamic currentUser = widget.user;
     final initialPhone = currentUser?.phoneNumber?.toString() ?? '';
@@ -1804,9 +1808,8 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
   }
 
   Widget _buildPanelContent() {
-    // EXCLUSIVE UI MAPPING: Enforce one layout at a time
+    // Existing granular RideState mapping
     switch (_currentRideState) {
-      case RideState.idle:
       case RideState.searchingAddresses:
         if (_isPickingFromMap) {
           return Column(

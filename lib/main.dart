@@ -15,6 +15,7 @@ import 'package:provider/provider.dart';
 import 'package:aeroride/controllers/ride_controller.dart';
 import 'package:aeroride/firebase_options.dart';
 import 'package:aeroride/screens/role_selection_screen.dart';
+import 'package:aeroride/controllers/welcome_view.dart';
 import 'package:aeroride/screens/views/driver_dashboard_view.dart'
     as driver_views;
 import 'package:aeroride/screens/views/rider_dashboard_view.dart'
@@ -58,7 +59,7 @@ class AeroRideApp extends StatelessWidget {
         title: 'AeroRide',
         debugShowCheckedModeBanner: false,
         theme: AeroRideTheme.light(),
-        home: const AuthWrapper(),
+        home: const AeroWelcomeView(),
       ),
     );
   }
