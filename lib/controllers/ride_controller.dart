@@ -111,7 +111,11 @@ class RideController extends ChangeNotifier {
           ? freshUser!.displayName!
           : (riderName.trim().isEmpty ? "Guest Rider" : riderName);
 
-      final rideFare = _estimateBaseFare(rideType);
+      // Use the selected tier to calculate the precise fare
+      final distance = _distanceMeters(pickup.latitude, pickup.longitude,
+              destination.latitude, destination.longitude) /
+          1000;
+      final rideFare = selectedTier?.estimateFare(distance) ?? 0.0; // Fallback to 0 if no tier selected
 
       final List<String> resolvedCandidateDrivers =
           candidateDriverIds == null || candidateDriverIds.isEmpty
@@ -160,7 +164,7 @@ class RideController extends ChangeNotifier {
         status: 'searching',
         estimatedCost: rideFare,
         candidateDrivers: resolvedCandidateDrivers,
-        rideType: rideType,
+        rideTier: selectedTier?.id, // Explicitly record the selected tier ID
       );
 
       stage = 'creating ride request';
@@ -198,18 +202,6 @@ class RideController extends ChangeNotifier {
         // Not a boxed JS error; ignore.
       }
       debugPrintStack(stackTrace: st, label: 'RideController.requestNewRide');
-    }
-  }
-
-  double _estimateBaseFare(String rideType) {
-    switch (rideType) {
-      case 'economy':
-        return 12.50;
-      case 'premium':
-        return 28.50;
-      case 'standard':
-      default:
-        return 18.00;
     }
   }
 
@@ -273,6 +265,27 @@ class RideController extends ChangeNotifier {
         // Sync the verification PIN from the typed RideRequest model
         if (liveRide.otp != null && liveRide.otp!.isNotEmpty) {
           rideVerificationOtp = liveRide.otp;
+        }
+
+        // Status Milestones: Trigger highly stylized context-specific notifications
+        if (prevStatus != currentRideStatus) {
+          String notificationTitle = "AeroRide Update";
+          String notificationBody = "";
+          switch (currentRideStatus) {
+            case 'SEARCHING':
+              notificationBody = "Assembling your premium environment options...";
+              break;
+            case 'ACCEPTED':
+              notificationBody = "Your dedicated chauffeur has accepted the trajectory. Preparing cabin workspace...";
+              break;
+            case 'ARRIVED':
+              notificationBody = "The fleet vehicle has touched down at your terminal location. Ready when you are...";
+              break;
+            case 'STARTED':
+              notificationBody = "Trajectory engaged. Transitioning to optimal atmospheric equilibrium...";
+              break;
+          }
+          if (notificationBody.isNotEmpty) NotificationService().showLocalNotification(title: notificationTitle, body: notificationBody);
         }
 
         final rideVehicleLocation = liveRide.currentVehicleLocation;
@@ -671,7 +684,7 @@ class RideController extends ChangeNotifier {
       final radius = size / 2;
 
       final shadowPaint = Paint()
-        ..color = Colors.black.withOpacity(0.22)
+        ..color = Colors.black.withValues(alpha: 0.22) // Already correct
         ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 10);
       canvas.drawCircle(center.translate(0, 5), radius * 0.74, shadowPaint);
 
@@ -891,31 +904,60 @@ class RideController extends ChangeNotifier {
       // Seed standard tiers (In production, load these from Firestore)
       vehicleTiers = [
         VehicleTier(
-          id: 'standard',
-          name: 'Standard',
-          description: 'Affordable, everyday rides',
+          id: 'tulia',
+          name: 'Tulia',
+          description: 'Sustainable, low-profile urban transit.',
           baseFare: 150.0,
           perKmRate: 45.0,
           capacity: 4,
-          benefits: ['Budget friendly', 'Top-rated drivers'],
+          benefits: [
+            'Eco-Conscious Carbon Footprint',
+            'Silent Interior Environment',
+            'Agile City Maneuvering'
+          ],
+          iconPath: 'assets/vitz.png',
         ),
         VehicleTier(
-          id: 'premium',
-          name: 'Premium',
-          description: 'Luxury sedans with top chauffeurs',
+          id: 'nuru',
+          name: 'Nuru',
+          description: 'Elevated workspace travel designed for your comfort.',
           baseFare: 350.0,
-          perKmRate: 85.0,
+          perKmRate: 80.0,
           capacity: 4,
-          benefits: ['Luxury vehicles', 'Extra legroom'],
+          benefits: [
+            'Curated Premium Audio & Mood Profiles',
+            'Climate Controlled Sanctuary',
+            'Top-Rated Five-Star Operators'
+          ],
+          iconPath: 'assets/premio.png',
         ),
         VehicleTier(
-          id: 'xl',
-          name: 'Executive XL',
-          description: 'Spacious SUVs for groups',
+          id: 'pamoja',
+          name: 'Pamoja',
+          description: 'Expansive space for your whole collective.',
           baseFare: 500.0,
           perKmRate: 110.0,
-          capacity: 6,
-          benefits: ['Fits up to 6', 'Great for luggage'],
+          capacity: 7,
+          benefits: [
+            'Maximized Legroom & Lounge Seating',
+            'Squad-Optimized High Capacity',
+            'Expansive Multi-Luggage Cargo Hull'
+          ],
+          iconPath: 'assets/honda freed.png',
+        ),
+        VehicleTier(
+          id: 'waziri',
+          name: 'Waziri',
+          description: 'Elite flagship command. Unmarked, unbothered.',
+          baseFare: 700.0,
+          perKmRate: 150.0,
+          capacity: 5,
+          benefits: [
+            'VIP Full-Grain Leather Lounge',
+            'Absolute Discretion Privacy Shield',
+            'Certified Professional Executive Chauffeur'
+          ],
+          iconPath: 'assets/prado.png',
         ),
       ];
       selectedTier = vehicleTiers.first;

@@ -32,7 +32,7 @@ service cloud.firestore {
         data.candidateDrivers.hasAny([request.auth.uid]);
     }
 
-    // ✅ UPDATED STATE MACHINE: Added 'arrived' cleanly to the lifecycle flow
+    // ✅ IMMERSIVE STATE MACHINE: Regulates proper sequential status flows
     function isValidStatusTransition(prev, next) {
       return (
         (prev == 'searching' && (next == 'accepted' || next == 'cancelled')) ||
@@ -60,8 +60,10 @@ service cloud.firestore {
         signedIn() && resource.data.status == 'searching'
       );
 
-      // ✅ DEVELOPMENT FIX: Relax initial creating check slightly to allow initial simulation writes
-      allow create: if signedIn();
+      // ✅ TAXIMETER SECURITY INJECTION: Enforces presence of verified Swahili atmospheric parameters upon request submission
+      allow create: if signedIn()
+        && request.resource.data.keys().hasAll(['rideTier', 'estimatedFare', 'status'])
+        && request.resource.data.rideTier in ['tulia', 'nuru', 'pamoja', 'waziri'];
 
       allow update: if signedIn()
         && (
@@ -90,7 +92,10 @@ service cloud.firestore {
 
     match /ride_requests/{rideId} {
       allow read: if signedIn();
-      allow create: if signedIn();
+      // Ensure requests are constructed containing accurate tier tracking data fields
+      allow create: if signedIn()
+        && request.resource.data.keys().hasAll(['rideTier', 'estimatedFare'])
+        && request.resource.data.rideTier in ['tulia', 'nuru', 'pamoja', 'waziri'];
       allow update: if signedIn();
       allow delete: if false;
     }

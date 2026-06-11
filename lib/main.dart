@@ -15,7 +15,8 @@ import 'package:provider/provider.dart';
 import 'package:aeroride/controllers/ride_controller.dart';
 import 'package:aeroride/firebase_options.dart';
 import 'package:aeroride/screens/role_selection_screen.dart';
-import 'package:aeroride/controllers/welcome_view.dart';
+import 'package:aeroride/widgets/main_layout_wrapper.dart';
+import 'package:aeroride/widgets/aero_welcome_view.dart';
 import 'package:aeroride/screens/views/driver_dashboard_view.dart'
     as driver_views;
 import 'package:aeroride/screens/views/rider_dashboard_view.dart'
@@ -59,7 +60,7 @@ class AeroRideApp extends StatelessWidget {
         title: 'AeroRide',
         debugShowCheckedModeBanner: false,
         theme: AeroRideTheme.light(),
-        home: const AeroWelcomeView(),
+        home: const AuthWrapper(),
       ),
     );
   }
@@ -87,22 +88,16 @@ class _AuthWrapperState extends State<AuthWrapper> {
           );
         }
 
-        // 2. FRICTIONLESS LANDING: If no active session is found, trigger
-        // background anonymous sign-in and show a clean loading state.
-        if (!snapshot.hasData || snapshot.data == null) {
-          authService.signInAnonymously();
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
+        // Handle Error States
+        if (snapshot.hasError) {
+          return Scaffold(
+            body: Center(child: Text("Startup Error: ${snapshot.error}")),
           );
         }
 
-        // 3. Render the Dashboard for both Guest and Authenticated users
-        final user = snapshot.data!;
-        return _StableDashboardMapWrapper(
-          // Key ensures state (map coordinates) persists during Guest -> Registered transition
-          key: ValueKey('dashboard_${user.uid}'),
-          child: rider_views.RiderDashboardView(user: user),
-        );
+        // Always start with the welcome view.
+        // The sign-in is handled when they click "LET'S GLIDE".
+        return const AeroWelcomeView();
       },
     );
   }

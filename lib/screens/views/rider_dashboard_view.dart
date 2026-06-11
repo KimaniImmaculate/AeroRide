@@ -202,7 +202,8 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       unawaited(_rideController.startRiderLocationTracking());
       _fetchUserProfile();
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) => _rideController.loadRideTypes());
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _rideController.loadRideTypes());
 
     final dynamic currentUser = widget.user;
     final initialPhone = currentUser?.phoneNumber?.toString() ?? '';
@@ -229,6 +230,8 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
   Future<void> _fetchUserProfile() async {
     try {
+      if (widget.user?.uid == null) return;
+
       final profile = await _firestoreService.getUserProfile(widget.user.uid);
       if (mounted) setState(() => _currentUserModel = profile);
     } catch (e) {
@@ -594,8 +597,15 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       // 3. Mathematical distance calculation (Haversine Formula)
       double distanceInKm =
           _calculateHaversineDistance(_riderLocation!, _destinationLocation!);
-      final fare = computeFareAndEarnings(distanceInKm, 0.0);
-      _calculatedFareKsh = fare.passengerFare;
+
+      // Use the selected tier from the controller for fare estimation
+      if (_rideController.selectedTier != null) {
+        _calculatedFareKsh =
+            _rideController.selectedTier!.estimateFare(distanceInKm);
+      } else {
+        final fare = computeFareAndEarnings(distanceInKm, 0.0);
+        _calculatedFareKsh = fare.passengerFare;
+      }
 
       await _loadNearbyDrivers(_riderLocation!);
 
@@ -1310,8 +1320,12 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
           }
         }
 
-        if (phase == TravelPhase.riderToDestination) {
-          _liveRunningFareKsh = 100.0 + (_liveTraveledDistanceKm * 90.0);
+        if (phase == TravelPhase.riderToDestination &&
+            _rideController.selectedTier != null) {
+          // Dynamic Taximeter: Use selected tier's base fare and per-km rate
+          _liveRunningFareKsh = _rideController.selectedTier!.baseFare +
+              (_liveTraveledDistanceKm *
+                  _rideController.selectedTier!.perKmRate);
           _liveDriverEarningsKsh = _liveTraveledDistanceKm * 75.0;
         }
 
@@ -1429,8 +1443,10 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                       backgroundColor: context.aeroTokens.primaryDarkBlue,
                       child: Text(
                         (_currentUserModel?.name ??
-                                widget.user.displayName ??
-                                'A')[0]
+                                widget.user?.displayName ??
+                                'A')
+                            .trim()
+                            .padRight(1, 'A')[0]
                             .toUpperCase(),
                         style: const TextStyle(
                           color: Colors.white,
@@ -1445,7 +1461,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                         children: [
                           Text(
                             _currentUserModel?.name ??
-                                widget.user.displayName ??
+                                widget.user?.displayName ??
                                 'AeroRide User',
                             style: const TextStyle(
                               fontWeight: FontWeight.w800,
@@ -1453,7 +1469,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                             ),
                           ),
                           Text(
-                            widget.user.email ?? '',
+                            widget.user?.email ?? '',
                             style: TextStyle(color: Colors.grey.shade600),
                           ),
                         ],
@@ -1518,8 +1534,10 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                       backgroundColor: Colors.grey.shade100,
                       child: Text(
                         (_currentUserModel?.name ??
-                                widget.user.displayName ??
-                                'A')[0]
+                                widget.user?.displayName ??
+                                'A')
+                            .trim()
+                            .padRight(1, 'A')[0]
                             .toUpperCase(),
                         style: const TextStyle(
                           fontSize: 20,
@@ -1535,7 +1553,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                         children: [
                           Text(
                             _currentUserModel?.name ??
-                                widget.user.displayName ??
+                                widget.user?.displayName ??
                                 'AeroRide User',
                             style: const TextStyle(
                               fontSize: 16,
@@ -1543,7 +1561,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                             ),
                           ),
                           Text(
-                            widget.user.email ?? 'passenger@aeroride.com',
+                            widget.user?.email ?? 'passenger@aeroride.com',
                             style: const TextStyle(
                               fontSize: 12,
                               color: Colors.grey,
@@ -1765,8 +1783,10 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                             backgroundColor: Colors.black,
                             child: Text(
                               (_currentUserModel?.name ??
-                                      widget.user.displayName ??
-                                      'A')[0]
+                                      widget.user?.displayName ??
+                                      'A')
+                                  .trim()
+                                  .padRight(1, 'A')[0]
                                   .toUpperCase(),
                               style: const TextStyle(
                                   color: Colors.white,

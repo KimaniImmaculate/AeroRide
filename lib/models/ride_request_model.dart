@@ -12,6 +12,7 @@ class RideRequest {
   final String pickupAddress;
   final String destinationAddress;
   final String status;
+  final String? rideTier;
   final double estimatedCost;
   final String? rideType;
   final String? otp;
@@ -29,6 +30,7 @@ class RideRequest {
     this.currentVehicleLocation,
     required this.pickupAddress,
     required this.destinationAddress,
+    this.rideTier,
     required this.status,
     required this.estimatedCost,
     this.rideType,
@@ -61,6 +63,7 @@ class RideRequest {
       status: map['status'] ?? 'searching',
       otp: map['otp'] as String?,
       estimatedCost: fareValue?.toDouble() ?? 0.0,
+      rideTier: map['rideTier'], // Add to fromMap
       createdAt: (map['createdAt'] as Timestamp?)?.toDate() ??
           (map['updatedAt'] as Timestamp?)?.toDate(),
       updatedAt: (map['updatedAt'] as Timestamp?)?.toDate(),
@@ -82,6 +85,7 @@ class RideRequest {
       'destinationAddress': destinationAddress,
       'status': status,
       'estimatedCost': estimatedCost,
+      'rideTier': rideTier, // <--- ADDED: Include in toMap()
       'finalFareCharged': estimatedCost,
       'otp': otp,
       'rideType': rideType ?? 'standard',

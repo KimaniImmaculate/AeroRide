@@ -18,7 +18,7 @@ class VehicleTier {
     required this.perKmRate,
     required this.capacity,
     required this.benefits,
-    this.iconPath = 'assets/images/cars/standard.png',
+    this.iconPath = 'assets/vitz.png', // Already correct
   });
 
   Map<String, dynamic> toMap() {
@@ -42,7 +42,7 @@ class VehicleTier {
       perKmRate: (map['perKmRate'] ?? 0.0).toDouble(),
       capacity: map['capacity'] ?? 4,
       benefits: List<String>.from(map['benefits'] ?? []),
-      iconPath: map['iconPath'] ?? 'assets/images/cars/standard.png',
+      iconPath: map['iconPath'] ?? 'assets/vitz.png', // Already correct
     );
   }
 

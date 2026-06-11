@@ -394,7 +394,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.92),
+        color: Colors.black.withValues(alpha: 0.92),
         borderRadius: BorderRadius.circular(14),
       ),
       child: Row(
@@ -681,7 +681,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
               width: double.infinity,
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                  color: Colors.lightGreen.withOpacity(0.12),
+                  color: Colors.lightGreen.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: Colors.green.shade400, width: 1.5)),
               child: Column(
