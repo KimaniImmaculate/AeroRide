@@ -22,6 +22,7 @@ import 'package:aeroride/screens/views/driver_dashboard_view.dart'
 import 'package:aeroride/screens/views/rider_dashboard_view.dart'
     as rider_views;
 import 'package:aeroride/services/auth_service.dart';
+import 'package:aeroride/screens/views/gateway_portal.dart';
 import 'package:aeroride/services/notification_service.dart';
 import 'package:aeroride/theme/aeroride_theme.dart';
 
@@ -97,7 +98,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
         // Always start with the welcome view.
         // The sign-in is handled when they click "LET'S GLIDE".
-        return const AeroWelcomeView();
+        return const AeroRideGatewayPortal(); // This is already correct
       },
     );
   }

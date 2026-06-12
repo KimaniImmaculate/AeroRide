@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:aeroride/controllers/ride_controller.dart';
 import 'package:aeroride/widgets/aero_welcome_view.dart';
+import 'package:aeroride/screens/views/gateway_portal.dart';
 
 class VehicleSelectionScreen extends StatefulWidget {
   final User user;
@@ -105,7 +106,7 @@ class _VehicleSelectionScreenState extends State<VehicleSelectionScreen> {
           // 2. Dark Luxury Dimming Mask
           Positioned.fill(
             child: Container(
-              color: Colors.black.withValues(alpha: 0.65),
+              color: Colors.black.withOpacity(0.65),
             ),
           ),
 
@@ -220,7 +221,7 @@ class _VehicleSelectionScreenState extends State<VehicleSelectionScreen> {
             left: 20,
             child: ClipOval(
               child: Material(
-                color: Colors.white.withValues(alpha: 0.12),
+                color: Colors.white.withOpacity(0.12),
                 child: InkWell(
                   onTap: () {
                     if (Navigator.of(context).canPop()) {
@@ -228,7 +229,7 @@ class _VehicleSelectionScreenState extends State<VehicleSelectionScreen> {
                     } else {
                       Navigator.of(context).pushReplacement(
                         MaterialPageRoute(
-                            builder: (_) => const AeroWelcomeView()),
+                            builder: (_) => const AeroRideGatewayPortal()),
                       );
                     }
                   },
@@ -310,11 +311,11 @@ class _AeroVibeCardState extends State<_AeroVibeCard> {
       decoration: BoxDecoration(
         color: widget.isSelected
             ? primaryTurquoise
-            : Colors.white.withValues(alpha: 0.95),
+            : Colors.white.withOpacity(0.95),
         borderRadius: BorderRadius.circular(32),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.2),
+            color: Colors.black.withOpacity(0.2),
             blurRadius: 15,
             offset: const Offset(0, 10),
           )
@@ -369,7 +370,7 @@ class _AeroVibeCardState extends State<_AeroVibeCard> {
       margin: const EdgeInsets.only(bottom: 24),
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.9),
+        color: Colors.black.withOpacity(0.9),
         borderRadius: BorderRadius.circular(32),
         border: Border.all(color: primaryTurquoise, width: 2),
       ),

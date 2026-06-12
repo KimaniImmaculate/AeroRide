@@ -110,12 +110,13 @@ class RideController extends ChangeNotifier {
       final resolvedRiderName = (freshUser?.displayName?.isNotEmpty ?? false)
           ? freshUser!.displayName!
           : (riderName.trim().isEmpty ? "Guest Rider" : riderName);
-
+      
       // Use the selected tier to calculate the precise fare
       final distance = _distanceMeters(pickup.latitude, pickup.longitude,
               destination.latitude, destination.longitude) /
           1000;
-      final rideFare = selectedTier?.estimateFare(distance) ?? 0.0; // Fallback to 0 if no tier selected
+      final rideFare = selectedTier?.estimateFare(distance) ??
+          0.0; // Fallback to 0 if no tier selected
 
       final List<String> resolvedCandidateDrivers =
           candidateDriverIds == null || candidateDriverIds.isEmpty
@@ -162,9 +163,9 @@ class RideController extends ChangeNotifier {
         pickupAddress: pickupText,
         destinationAddress: dropoffText,
         status: 'searching',
-        estimatedCost: rideFare,
+        estimatedCost: rideFare, // Use the calculated fare
         candidateDrivers: resolvedCandidateDrivers,
-        rideTier: selectedTier?.id, // Explicitly record the selected tier ID
+        rideTier: selectedTier?.id.toLowerCase(), // Enforce: tulia, nuru, pamoja, waziri
       );
 
       stage = 'creating ride request';
@@ -273,19 +274,25 @@ class RideController extends ChangeNotifier {
           String notificationBody = "";
           switch (currentRideStatus) {
             case 'SEARCHING':
-              notificationBody = "Assembling your premium environment options...";
+              notificationBody =
+                  "Assembling your premium environment options...";
               break;
             case 'ACCEPTED':
-              notificationBody = "Your dedicated chauffeur has accepted the trajectory. Preparing cabin workspace...";
+              notificationBody =
+                  "Your dedicated chauffeur has accepted the trajectory. Preparing cabin workspace...";
               break;
             case 'ARRIVED':
-              notificationBody = "The fleet vehicle has touched down at your terminal location. Ready when you are...";
+              notificationBody =
+                  "The fleet vehicle has touched down at your terminal location. Ready when you are...";
               break;
             case 'STARTED':
-              notificationBody = "Trajectory engaged. Transitioning to optimal atmospheric equilibrium...";
+              notificationBody =
+                  "Trajectory engaged. Transitioning to optimal atmospheric equilibrium...";
               break;
           }
-          if (notificationBody.isNotEmpty) NotificationService().showLocalNotification(title: notificationTitle, body: notificationBody);
+          if (notificationBody.isNotEmpty)
+            NotificationService().showLocalNotification(
+                title: notificationTitle, body: notificationBody);
         }
 
         final rideVehicleLocation = liveRide.currentVehicleLocation;
@@ -962,10 +969,16 @@ class RideController extends ChangeNotifier {
       ];
       selectedTier = vehicleTiers.first;
 
-      availableRideTypes = await _firestoreService.getRideTypes();
-      if (availableRideTypes.isNotEmpty && selectedRideType == null) {
-        selectedRideType = availableRideTypes.first;
-        selectedRideTypeId = selectedRideType!.id;
+      try {
+        availableRideTypes = await _firestoreService.getRideTypes();
+        if (availableRideTypes.isNotEmpty && selectedRideType == null) {
+          selectedRideType = availableRideTypes.first;
+          selectedRideTypeId = selectedRideType!.id;
+        }
+      } catch (e) {
+        debugPrint(
+            'RideController: Firestore RideTypes blocked. Using local tiers.');
+        // The vehicleTiers defined above ensure the app remains usable.
       }
       notifyListeners();
     } catch (e) {

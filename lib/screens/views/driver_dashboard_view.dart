@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
@@ -17,10 +18,11 @@ import '../../screens/driver/driver_profile_screen.dart';
 import 'support_view.dart';
 import 'wallet_view.dart';
 import '../../theme/aeroride_theme.dart';
-import '../role_selection_screen.dart';
+import 'package:aeroride/screens/views/gateway_portal.dart';
 import '../../services/firestore_service.dart';
 import '../../services/mock_route_service.dart';
 import '../../models/ride_request_model.dart';
+import '../../utils/location_extensions.dart';
 
 class MockRideRequest {
   final String id;
@@ -44,33 +46,31 @@ class MockRideRequest {
   });
 }
 
-enum DriverRideState {
-  searchingRequests,
-  navigatingToPickup,
-  arrivedAtPickup,
-  passengerInTransit,
-  tripCompleted,
+enum DriverTerminalState {
+  offline,
+  searching,
+  accepted,
+  arrived,
+  inTransit,
+  completing,
 }
 
 class DriverDashboardView extends StatefulWidget {
-  final dynamic user;
+  final User? user;
   const DriverDashboardView({super.key, required this.user});
 
   @override
   State<DriverDashboardView> createState() => _DriverDashboardViewState();
 }
 
-// ⚠️ FIXED: The variables were sitting here out in the open. They have been moved inside the class below.
-
 class _DriverDashboardViewState extends State<DriverDashboardView> {
   static const double kSegmentThresholdKm = 0.0001;
+  static const Color signatureTurquoise = Color(0xFF16A085);
+
   GoogleMapController? _mapController;
-  DriverRideState _currentDriverState = DriverRideState.searchingRequests;
+  DriverTerminalState _currentState = DriverTerminalState.offline;
 
-  int _selectedTabIndex = 0; // 0 = Map, 1 = Profile
-
-  bool _isAwaitingPayment = false;
-  bool _paymentReceived = false;
+  int _selectedTabIndex = 0;
   bool _isProcessingPaymentPush = false;
 
   Timer? _driverSimulationTimer;
@@ -81,8 +81,9 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   double _driverLiveEarningsKsh = 0.0;
   double _passengerLiveFareKsh = 100.0;
 
-  List<MockRideRequest> _availableRequests = [];
-  MockRideRequest? _activeRequest;
+  bool _paymentReceived = false;
+  List<RideRequest> _availableRequests = [];
+  RideRequest? _activeRequest;
   bool _isOnline = false;
   bool _isSearchingForRides = false;
   bool _hasIncomingRequest = false;
@@ -108,12 +109,11 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   final Set<Polyline> _mapPolylines = {};
   final Set<Marker> _mapMarkers = {};
 
-  // Import fare calculator helpers
-  // Note: uses lib/utils/fare_calculator.dart
-
   @override
   void initState() {
     super.initState();
+    _isOnline = false;
+    _currentState = DriverTerminalState.offline;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         unawaited(_determineDriverGPSLocation());
@@ -132,11 +132,10 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   void _autoTriggerIncomingRideSearch() {
     _driverRequestsSub?.cancel();
     setState(() {
+      _currentState = DriverTerminalState.searching;
       _isSearchingForRides = true;
       _availableRequests.clear();
       _activeRequest = null;
-      _hasIncomingRequest = false;
-      _isTripActive = false;
 
       // Clear the local trip simulation state before listening for live rides.
       _driverWaypointIndex = 0;
@@ -148,36 +147,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
         .listen((rideList) {
       if (!mounted) return;
       setState(() {
-        _availableRequests = rideList.map((r) {
-          final distanceKm = Geolocator.distanceBetween(
-                r.pickupLocation.latitude,
-                r.pickupLocation.longitude,
-                r.destinationLocation.latitude,
-                r.destinationLocation.longitude,
-              ) /
-              1000.0;
-          final fallbackFare =
-              computeFareAndEarnings(distanceKm, 0.0).passengerFare;
-          final displayedFare =
-              r.estimatedCost > 0 ? r.estimatedCost : fallbackFare;
-
-          return MockRideRequest(
-            id: r.id ?? r.userId,
-            riderName: r.riderName ?? r.userId,
-            createdAt: r.createdAt,
-            pickupName: r.pickupAddress.isNotEmpty
-                ? r.pickupAddress
-                : '${r.pickupLocation.latitude}, ${r.pickupLocation.longitude}',
-            destinationName: r.destinationAddress.isNotEmpty
-                ? r.destinationAddress
-                : '${r.destinationLocation.latitude}, ${r.destinationLocation.longitude}',
-            pickupCoords:
-                LatLng(r.pickupLocation.latitude, r.pickupLocation.longitude),
-            destinationCoords: LatLng(r.destinationLocation.latitude,
-                r.destinationLocation.longitude),
-            estimatedFare: displayedFare,
-          );
-        }).toList();
+        _availableRequests = rideList;
         _hasIncomingRequest = _availableRequests.isNotEmpty;
         _isSearchingForRides = false;
       });
@@ -211,7 +181,6 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
     Timer(const Duration(seconds: 3), () {
       if (mounted) {
         setState(() {
-          _isAwaitingPayment = false;
           _isProcessingPaymentPush = false;
           _paymentReceived = true;
 
@@ -242,9 +211,10 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                       radius: 24,
                       backgroundColor: Colors.black,
                       child: Text(
-                        (widget.user.displayName?.isNotEmpty ?? false)
-                            ? widget.user.displayName![0].toUpperCase()
-                            : 'D',
+                        // Added null check for widget.user.displayName
+                        (widget.user?.displayName?.isNotEmpty ?? false)
+                            ? widget.user!.displayName![0].toUpperCase()
+                            : 'D', // Fallback to 'D' if displayName is null or empty
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w800,
@@ -257,15 +227,18 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            widget.user.displayName ?? 'Driver',
+                            widget.user?.displayName ??
+                                'Driver', // Fallback for displayName
                             style: const TextStyle(
                               fontWeight: FontWeight.w800,
                               fontSize: 16,
                             ),
                           ),
                           Text(
-                            widget.user.email ?? '',
-                            style: TextStyle(color: Colors.grey.shade600),
+                            widget.user?.email ?? '',
+                            style: TextStyle(
+                                color:
+                                    Colors.grey.shade600), // Fallback for email
                           ),
                         ],
                       ),
@@ -283,7 +256,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                       context,
                       MaterialPageRoute(
                         builder: (context) =>
-                            DriverProfileScreen(user: widget.user),
+                            DriverProfileScreen(user: widget.user!),
                       ),
                     );
                   },
@@ -298,7 +271,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                       context,
                       MaterialPageRoute(
                         builder: (context) =>
-                            DriverProfileScreen(user: widget.user),
+                            DriverProfileScreen(user: widget.user!),
                       ),
                     );
                   },
@@ -364,7 +337,8 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
 
       setState(() {
         _driverCurrentLocation = LatLng(position.latitude, position.longitude);
-        _isOnline = true;
+        _isOnline = false; // Start offline by default for luxury flow
+        _currentState = DriverTerminalState.offline;
       });
 
       _rebuildMapElements();
@@ -386,7 +360,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   }
 
   Widget _buildDriverTaximeterDock() {
-    if (!_isTripActive && _driverWaypointIndex == 0 && !_isSearchingForRides) {
+    if (_currentState != DriverTerminalState.inTransit) {
       return const SizedBox.shrink();
     }
 
@@ -394,7 +368,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.92),
+        color: Colors.black.withOpacity(0.92),
         borderRadius: BorderRadius.circular(14),
       ),
       child: Row(
@@ -455,76 +429,90 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   Widget _buildDriverWorkflowControls() {
     return Container(
       padding: const EdgeInsets.all(20),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.only(
-            topLeft: Radius.circular(24), topRight: Radius.circular(24)),
-        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 10)],
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1C1E).withOpacity(0.9),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+        border: Border.all(color: Colors.white10),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // =========================================================================
-          // ✅ NEW SYSTEM PIECE: OFFLINE LOCKOUT STATUS NOTICE CARD
-          // =========================================================================
-          if (!_isOnline) ...[
+          if (_currentState == DriverTerminalState.offline) ...[
             Center(
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 30),
                 child: Column(
                   children: [
-                    Icon(Icons.wifi_off_rounded,
-                        size: 44, color: Colors.grey.shade400),
+                    const Icon(Icons.power_settings_new_rounded,
+                        size: 60, color: signatureTurquoise),
                     const SizedBox(height: 12),
-                    const Text("You are currently Offline",
-                        style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                            color: Colors.black87)),
+                    Text("COCKPIT OFFLINE",
+                        style: GoogleFonts.urbanist(
+                            fontWeight: FontWeight.w900,
+                            fontSize: 20,
+                            color: Colors.white)),
                     const SizedBox(height: 6),
-                    const Text(
-                        "To see available ride requests in Nakuru and start earning money, please go to your Profile / Account tab and switch your status to Available.",
+                    Text(
+                        "Toggle availability to begin scanning the AeroRide grid.",
                         textAlign: TextAlign.center,
-                        style: TextStyle(
-                            fontSize: 12, color: Colors.black54, height: 1.4)),
+                        style: GoogleFonts.urbanist(
+                            fontSize: 13, color: Colors.white54)),
+                    const SizedBox(height: 24),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: signatureTurquoise,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16)),
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            _isOnline = true;
+                            _currentState = DriverTerminalState.searching;
+                          });
+                          _autoTriggerIncomingRideSearch();
+                        },
+                        child: Text("GO ONLINE",
+                            style: GoogleFonts.urbanist(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white)),
+                      ),
+                    )
                   ],
                 ),
               ),
             ),
           ],
-
-          // PHASE 1: SEARCHING ANIMATION (Only works if online)
-          if (_isOnline && _isSearchingForRides) ...[
+          if (_currentState == DriverTerminalState.searching) ...[
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
-              children: const [
-                SizedBox(
+              children: [
+                const SizedBox(
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.black)),
-                SizedBox(width: 12),
+                        strokeWidth: 2, color: signatureTurquoise)),
+                const SizedBox(width: 12),
                 Expanded(
-                    child: Text("Scanning Nakuru for match alerts...",
-                        style: TextStyle(
-                            fontWeight: FontWeight.bold, fontSize: 13))),
+                    child: Text("Scanning Grid Telemetry...",
+                        style: GoogleFonts.urbanist(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                            color: Colors.white70))),
               ],
             ),
             const SizedBox(height: 4),
           ],
-
-          // PHASE 2: MULTI-REQUEST MARKETPLACE LIST FEED (Only works if online)
-          if (_isOnline &&
-              _availableRequests.isNotEmpty &&
-              !_isTripActive &&
-              !_isAwaitingPayment &&
-              !_paymentReceived) ...[
-            Text("AVAILABLE RIDES NEARBY (${_availableRequests.length})",
-                style: const TextStyle(
+          if (_currentState == DriverTerminalState.searching &&
+              _availableRequests.isNotEmpty) ...[
+            Text("AVAILABLE DISPATCHES (${_availableRequests.length})",
+                style: GoogleFonts.urbanist(
                     fontWeight: FontWeight.w900,
                     fontSize: 11,
-                    color: Colors.black54,
+                    color: signatureTurquoise,
                     letterSpacing: 1)),
             const SizedBox(height: 10),
             ConstrainedBox(
@@ -537,58 +525,48 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                       margin: const EdgeInsets.only(bottom: 10),
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                          color: Colors.grey.shade50,
+                          color: Colors.white.withOpacity(0.05),
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.black12)),
+                          border: Border.all(color: Colors.white10)),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text(request.riderName,
-                                  style: const TextStyle(
+                              Text(request.riderName ?? "Rider",
+                                  style: GoogleFonts.urbanist(
                                       fontWeight: FontWeight.bold,
-                                      fontSize: 14)),
+                                      fontSize: 14,
+                                      color: Colors.white)),
                               Text(
-                                  "Est: KSh ${request.estimatedFare.toStringAsFixed(0)}",
-                                  style: const TextStyle(
+                                  "Est: KSh ${request.estimatedCost.toStringAsFixed(0)}",
+                                  style: GoogleFonts.urbanist(
                                       fontWeight: FontWeight.w900,
-                                      color: Colors.green,
+                                      color: signatureTurquoise,
                                       fontSize: 13)),
                             ],
                           ),
                           const SizedBox(height: 4),
-                          Text(
-                              "Created: ${_formatRequestTime(request.createdAt)}",
-                              style: const TextStyle(
-                                  fontSize: 11, color: Colors.black54),
+                          Text("From: ${request.pickupAddress}",
+                              style: GoogleFonts.urbanist(
+                                  fontSize: 11, color: Colors.white54),
                               overflow: TextOverflow.ellipsis),
-                          Text("From: ${request.pickupName}",
-                              style: const TextStyle(
-                                  fontSize: 11, color: Colors.black54),
-                              overflow: TextOverflow.ellipsis),
-                          Text("To: ${request.destinationName}",
-                              style: const TextStyle(
-                                  fontSize: 11, color: Colors.black54),
+                          Text("To: ${request.destinationAddress}",
+                              style: GoogleFonts.urbanist(
+                                  fontSize: 11, color: Colors.white54),
                               overflow: TextOverflow.ellipsis),
                           const SizedBox(height: 8),
                           ElevatedButton(
                             style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.black,
-                                foregroundColor: Colors.white,
-                                minimumSize: const Size.fromHeight(36)),
+                              backgroundColor: signatureTurquoise,
+                              foregroundColor: Colors.white,
+                              minimumSize: const Size.fromHeight(36),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8)),
+                            ),
                             onPressed: () {
-                              _acceptRideRequest({
-                                'id': request.id,
-                                'riderName': request.riderName,
-                                'pickupLatLng': request.pickupCoords,
-                                'destinationLatLng': request.destinationCoords,
-                                'estimatedFare': request.estimatedFare,
-                                'pickupName': request.pickupName,
-                                'destinationName': request.destinationName,
-                                'createdAt': request.createdAt,
-                              });
+                              _acceptRideRequest(request.toMap());
                             },
                             child: const Text("ACCEPT JOB",
                                 style: TextStyle(
@@ -602,14 +580,13 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
               ),
             ),
           ],
-
-          // PHASE 3: ACTIVE TRIP HUD PROGRESS
-          if (_isTripActive && _activeRequest != null) ...[
+          if (_currentState == DriverTerminalState.inTransit &&
+              _activeRequest != null) ...[
             Text("CURRENT TRIP: ${_activeRequest!.riderName}",
-                style: const TextStyle(
+                style: GoogleFonts.urbanist(
                     fontWeight: FontWeight.bold,
                     fontSize: 11,
-                    color: Colors.blue)),
+                    color: signatureTurquoise)),
             const SizedBox(height: 6),
             Row(
               children: [
@@ -617,34 +594,36 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                     width: 12,
                     height: 12,
                     child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.blue)),
+                        strokeWidth: 2, color: signatureTurquoise)),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    "En route to ${_activeRequest!.destinationName}... Progress: ${_driverTraveledDistanceKm.toStringAsFixed(1)} KM",
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 12),
+                    "En route... Progress: ${_driverTraveledDistanceKm.toStringAsFixed(1)} KM",
+                    style: GoogleFonts.urbanist(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                        color: Colors.white70),
                   ),
                 ),
               ],
             ),
           ],
-
-          // PHASE 4: COLLECT PAYMENT GATEWAY CONTROL
-          if (_isAwaitingPayment && !_isProcessingPaymentPush) ...[
-            const Text("DESTINATION ARRIVED",
-                style: TextStyle(
+          if (_currentState == DriverTerminalState.completing &&
+              !_isProcessingPaymentPush) ...[
+            Text("DESTINATION ARRIVED",
+                style: GoogleFonts.urbanist(
                     fontWeight: FontWeight.bold,
                     fontSize: 11,
                     color: Colors.redAccent)),
             const SizedBox(height: 4),
             Text(
                 "Please request final trip remittance statement from ${_activeRequest?.riderName ?? 'Passenger'}.",
-                style: const TextStyle(fontSize: 12, color: Colors.black54)),
+                style:
+                    GoogleFonts.urbanist(fontSize: 12, color: Colors.white54)),
             const SizedBox(height: 12),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
+                  backgroundColor: signatureTurquoise,
                   foregroundColor: Colors.white,
                   minimumSize: const Size.fromHeight(45)),
               onPressed: () => _triggerSimulatedRiderPayment(),
@@ -653,18 +632,16 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                   style: const TextStyle(fontWeight: FontWeight.bold)),
             ),
           ],
-
-          // SIMULATED TRANSACTION NETWORK PING LOCKER
           if (_isProcessingPaymentPush) ...[
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
-              children: const [
-                SizedBox(
+              children: [
+                const SizedBox(
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.green)),
-                SizedBox(width: 14),
+                        strokeWidth: 2, color: signatureTurquoise)),
+                const SizedBox(width: 14),
                 Text("Awaiting Rider Wallet transaction auth...",
                     style: TextStyle(
                         fontWeight: FontWeight.bold,
@@ -674,34 +651,34 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
             ),
             const SizedBox(height: 4),
           ],
-
-          // PHASE 5: NOTIFICATION ALERTS DISPATCH & REBOOT SWEEP
           if (_paymentReceived) ...[
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                  color: Colors.lightGreen.withValues(alpha: 0.12),
+                  color: signatureTurquoise.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.green.shade400, width: 1.5)),
+                  border:
+                      Border.all(color: signatureTurquoise.withOpacity(0.3))),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
-                    children: const [
-                      Icon(Icons.sms, color: Colors.green, size: 20),
-                      SizedBox(width: 8),
+                    children: [
+                      const Icon(Icons.check_circle_outline,
+                          color: signatureTurquoise, size: 20),
+                      const SizedBox(width: 8),
                       Text("IN-APP MESSAGE LOG",
-                          style: TextStyle(
+                          style: GoogleFonts.urbanist(
                               fontWeight: FontWeight.w900,
                               fontSize: 11,
-                              color: Colors.green)),
+                              color: signatureTurquoise)),
                     ],
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    "📩 Success! ${_activeRequest?.riderName ?? 'Passenger'} has paid KSh ${_passengerLiveFareKsh.toStringAsFixed(0)} via AeroRide Pay. Your balance earned (KSh ${_driverLiveEarningsKsh.toStringAsFixed(0)}) has been successfully added to your account ledger wallet.",
-                    style: const TextStyle(
+                    "Success! Settlement received via AeroRide Pay. Account ledger updated.",
+                    style: GoogleFonts.urbanist(
                         fontSize: 12,
                         height: 1.4,
                         color: Colors.black87,
@@ -713,11 +690,12 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
             const SizedBox(height: 12),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.black,
+                  backgroundColor: signatureTurquoise,
                   foregroundColor: Colors.white,
                   minimumSize: const Size.fromHeight(42)),
               onPressed: () {
                 setState(() {
+                  _currentState = DriverTerminalState.searching;
                   _paymentReceived = false;
                   _isOnline = true;
                 });
@@ -730,6 +708,65 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
         ],
       ),
     );
+  }
+
+  Widget _buildTelemetryPanel() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+      decoration: const BoxDecoration(
+        color: Color(0xFF111113),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text("GRID TELEMETRY OVERRIDES",
+              style: TextStyle(
+                  color: Colors.white38,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.5)),
+          const SizedBox(height: 16),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _buildHazardChip("MAANDAMANO"),
+                const SizedBox(width: 8),
+                _buildHazardChip("FLASH FLOOD"),
+                const SizedBox(width: 8),
+                _buildHazardChip("SEVERE POTHOLES"),
+              ],
+            ),
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHazardChip(String label) {
+    return ActionChip(
+      backgroundColor: Colors.white.withOpacity(0.05),
+      side: const BorderSide(color: Colors.white10),
+      label: Text(label,
+          style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 10,
+              fontWeight: FontWeight.bold)),
+      onPressed: () => _reportHazard(label),
+    );
+  }
+
+  Future<void> _reportHazard(String type) async {
+    await FirebaseFirestore.instance.collection('live_hazards').add({
+      'type': type,
+      'reporterId': widget.user?.uid ?? 'anonymous_driver', // Fallback for uid
+      'timestamp': FieldValue.serverTimestamp(),
+      'location': GeoPoint(
+          _driverCurrentLocation.latitude, _driverCurrentLocation.longitude),
+    });
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text("GRID ALERT: $type reported")));
   }
 
   Widget _buildSheetActionRow(
@@ -773,19 +810,19 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                   Icon(
                     Icons.circle,
                     size: 11,
-                    color: !_isOnline
+                    color: _currentState == DriverTerminalState.offline
                         ? Colors.redAccent
-                        : (_currentDriverState ==
-                                DriverRideState.searchingRequests
+                        : (_currentState == DriverTerminalState.searching
                             ? Colors.greenAccent
                             : Colors.orangeAccent),
                   ),
                   const SizedBox(width: 10),
                   Text(
-                    !_isOnline
+                    _currentState == DriverTerminalState.offline
                         ? 'STATUS: OFFLINE'
-                        : (_currentDriverState ==
-                                DriverRideState.searchingRequests
+                        : (_currentState ==
+                                DriverTerminalState
+                                    .searching // Added null check for displayName
                             ? 'STATUS: ONLINE'
                             : 'JOB IN PROGRESS'),
                     style: const TextStyle(
@@ -828,7 +865,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
     setState(() {
       _activeRideData = selectedRide;
       activeRideDocId = selectedRide['id']?.toString();
-      _currentDriverState = DriverRideState.navigatingToPickup;
+      _currentState = DriverTerminalState.accepted;
 
       double distanceMeters = Geolocator.distanceBetween(
         _driverCurrentLocation.latitude,
@@ -850,9 +887,10 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       final mock = MockRideRequest(
         id: selectedRide['id']?.toString() ?? activeRideDocId ?? '',
         riderName: selectedRide['riderName']?.toString() ??
-            (widget.user.displayName ?? 'Passenger'),
+            (widget.user?.displayName ?? 'Passenger'),
         createdAt: selectedRide['createdAt'] is DateTime
-            ? selectedRide['createdAt'] as DateTime?
+            ? selectedRide['createdAt']
+                as DateTime? // Added null check for displayName
             : (selectedRide['createdAt'] is Timestamp
                 ? (selectedRide['createdAt'] as Timestamp).toDate()
                 : null),
@@ -879,8 +917,8 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
     if (_driverSimulationTimer != null) return;
     if (_driverActualRoadPoints.isEmpty) return;
     if (!mounted) return;
-    if (!(_currentDriverState == DriverRideState.arrivedAtPickup ||
-        _currentDriverState == DriverRideState.passengerInTransit)) return;
+    if (_currentState != DriverTerminalState.arrived &&
+        _currentState != DriverTerminalState.inTransit) return;
 
     double calculateDistance(LatLng p1, LatLng p2) {
       const p = 0.017453292519943295;
@@ -894,7 +932,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
     }
 
     setState(() {
-      _currentDriverState = DriverRideState.passengerInTransit;
+      _currentState = DriverTerminalState.inTransit;
       // Ensure index starts at zero if not set
       _driverWaypointIndex =
           _driverWaypointIndex.clamp(0, _driverActualRoadPoints.length);
@@ -915,10 +953,8 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
           timer.cancel();
           setState(() {
             _isTripActive = false;
-            _isAwaitingPayment = true;
+            _currentState = DriverTerminalState.completing;
             _paymentReceived = false;
-            _isProcessingPaymentPush = false;
-            _currentDriverState = DriverRideState.tripCompleted;
           });
           _driverSimulationTimer = null;
           return;
@@ -969,7 +1005,19 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
         (_availableRequests.isNotEmpty ? _availableRequests.first : null);
     if (selectedRequest == null) return;
 
-    unawaited(_startLocalDriverTripSimulation(selectedRequest));
+    // Convert RideRequest to MockRideRequest for the simulation engine
+    final mock = MockRideRequest(
+      id: selectedRequest.id ?? '',
+      riderName: selectedRequest.riderName ?? 'Passenger',
+      createdAt: selectedRequest.createdAt,
+      pickupName: selectedRequest.pickupAddress,
+      destinationName: selectedRequest.destinationAddress,
+      pickupCoords: selectedRequest.pickupLocation.toLatLng(),
+      destinationCoords: selectedRequest.destinationLocation.toLatLng(),
+      estimatedFare: selectedRequest.estimatedCost,
+    );
+
+    unawaited(_startLocalDriverTripSimulation(mock));
   }
 
   Future<void> _startLocalDriverTripSimulation(
@@ -978,12 +1026,11 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
     _simulationTimer?.cancel();
 
     setState(() {
-      _activeRequest = selectedRequest;
+      _activeRequest = RideRequest.fromMap(
+          _activeRideData!, _activeRideData!['id'] ?? 'sim_ride');
       _activeRideData = {
         'id': selectedRequest.id,
         'riderName': selectedRequest.riderName,
-        'pickupName': selectedRequest.pickupName,
-        'destinationName': selectedRequest.destinationName,
         'pickupLatLng': selectedRequest.pickupCoords,
         'destinationLatLng': selectedRequest.destinationCoords,
       };
@@ -995,7 +1042,6 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       _driverTraveledDistanceKm = 0.0;
       _driverLiveEarningsKsh = 0.0;
       _passengerLiveFareKsh = 100.0;
-      _isAwaitingPayment = false;
       _paymentReceived = false;
       _isProcessingPaymentPush = false;
     });
@@ -1013,7 +1059,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
           ? pickupRoute
           : <LatLng>[_driverCurrentLocation, pickupLatLng];
       _driverWaypointIndex = 0;
-      _currentDriverState = DriverRideState.navigatingToPickup;
+      _currentState = DriverTerminalState.accepted;
     });
 
     _rebuildMapElements();
@@ -1106,9 +1152,9 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
 
     setState(() {
       _driverWaypointIndex = 0;
-      _currentDriverState = toPickup
-          ? DriverRideState.navigatingToPickup
-          : DriverRideState.passengerInTransit;
+      _currentState = toPickup
+          ? DriverTerminalState.accepted
+          : DriverTerminalState.inTransit;
     });
 
     _simulationTimer =
@@ -1123,7 +1169,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
         _simulationTimer = null;
         if (toPickup) {
           setState(() {
-            _currentDriverState = DriverRideState.arrivedAtPickup;
+            _currentState = DriverTerminalState.arrived;
             _etaMinutes = 0;
             _driverTraveledDistanceKm = 0.0;
             _passengerLiveFareKsh = 100.0;
@@ -1144,7 +1190,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                   ? dropoffRoute
                   : <LatLng>[_driverCurrentLocation, destinationLatLng];
               _driverWaypointIndex = 0;
-              _currentDriverState = DriverRideState.passengerInTransit;
+              _currentState = DriverTerminalState.inTransit;
             });
 
             _rebuildMapElements();
@@ -1153,10 +1199,8 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
         } else {
           setState(() {
             _isTripActive = false;
-            _isAwaitingPayment = true;
+            _currentState = DriverTerminalState.completing;
             _paymentReceived = false;
-            _isProcessingPaymentPush = false;
-            _currentDriverState = DriverRideState.tripCompleted;
           });
           _simulationTimer = null;
         }
@@ -1181,19 +1225,16 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   Future<void> _finalizeTripToCloudDatabase() async {
     setState(() {
       _isTripActive = false;
-      _currentDriverState = DriverRideState.tripCompleted;
+      _currentState = DriverTerminalState.completing;
     });
-
-    debugPrint(
-      'Trip completed locally: distance=${_driverTraveledDistanceKm.toStringAsFixed(2)}km fare=${_passengerLiveFareKsh.round()} earnings=${_driverLiveEarningsKsh.round()}',
-    );
   }
 
   void _resetDriverDashboard() {
     setState(() {
-      _currentDriverState = DriverRideState.searchingRequests;
+      _currentState = DriverTerminalState.searching;
       _activeRideData = null;
       activeRideDocId = null;
+      _isOnline = true;
       _mapPolylines.clear();
       _mapMarkers.clear();
     });
@@ -1241,8 +1282,8 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       ));
 
       List<LatLng> points;
-      if ((_currentDriverState == DriverRideState.navigatingToPickup ||
-              _currentDriverState == DriverRideState.passengerInTransit) &&
+      if ((_currentState == DriverTerminalState.accepted ||
+              _currentState == DriverTerminalState.inTransit) &&
           _driverActualRoadPoints.isNotEmpty) {
         points = _driverActualRoadPoints;
       } else {
@@ -1346,7 +1387,8 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   Widget build(BuildContext context) {
     // 1. MARKER GENERATION GRID (Stays identical)
     Set<Marker> driverScreenMarkers = {};
-    if (!_isTripActive && _driverWaypointIndex == 0 && _isOnline) {
+    if (_currentState == DriverTerminalState.searching ||
+        _currentState == DriverTerminalState.offline) {
       driverScreenMarkers.add(
         Marker(
           markerId: const MarkerId("driver_initial_car"),
@@ -1356,7 +1398,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
           infoWindow: const InfoWindow(title: "My Vehicle (Online)"),
         ),
       );
-    } else if (_isTripActive && _activeRequest != null) {
+    } else if (_activeRequest != null) {
       driverScreenMarkers.addAll([
         Marker(
           markerId: const MarkerId("moving_driver_car"),
@@ -1366,13 +1408,13 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
         ),
         Marker(
           markerId: const MarkerId("passenger_pickup_node"),
-          position: _activeRequest!.pickupCoords,
+          position: _activeRequest!.pickupLocation.toLatLng(),
           icon:
               BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
         ),
         Marker(
           markerId: const MarkerId("passenger_dropoff_node"),
-          position: _activeRequest!.destinationCoords,
+          position: _activeRequest!.destinationLocation.toLatLng(),
           icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
         ),
       ]);
@@ -1380,7 +1422,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
 
     // 2. RENDERING THE CHOSEN TAB CONTROLLER
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: const Color(0xFF111113),
 
       // THE CORE BODY CONTAINER
       body: IndexedStack(
@@ -1395,6 +1437,17 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                 flex: 5,
                 child: Stack(
                   children: [
+                    Opacity(
+                      opacity: 0.08,
+                      child: Container(
+                        decoration: const BoxDecoration(
+                          image: DecorationImage(
+                            image: AssetImage('assets/nairobi_night_grid.png'),
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                    ),
                     GoogleMap(
                       initialCameraPosition: CameraPosition(
                           target: _mockDriverCurrentLocation, zoom: 13.5),
@@ -1423,7 +1476,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
               Expanded(
                 flex: 5,
                 child: Container(
-                  color: Colors.white,
+                  color: Colors.transparent,
                   padding:
                       const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
                   child: SingleChildScrollView(
@@ -1433,6 +1486,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                       children: [
                         _buildDriverTaximeterDock(),
                         _buildDriverWorkflowControls(),
+                        if (_isOnline) _buildTelemetryPanel(),
                       ],
                     ),
                   ),
@@ -1476,7 +1530,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                           radius: 24,
                           backgroundColor: Colors.black87,
                           child: Text(
-                            (widget.user.displayName ?? "A")
+                            (widget.user?.displayName ?? "A")
                                 .substring(0, 1)
                                 .toUpperCase(),
                             style: const TextStyle(
@@ -1490,8 +1544,10 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
+                              // Added null check for displayName
                               Text(
-                                  widget.user.displayName ?? "AeroRide Partner",
+                                  widget.user?.displayName ??
+                                      "AeroRide Partner",
                                   style: const TextStyle(
                                       fontWeight: FontWeight.bold,
                                       fontSize: 15)),
@@ -1599,7 +1655,8 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                       // ✅ Explicit page route instead of named route string
                       Navigator.of(context).pushAndRemoveUntil(
                         MaterialPageRoute(
-                            builder: (context) => const RoleSelectionScreen()),
+                            builder: (context) =>
+                                const AeroRideGatewayPortal()),
                         (route) =>
                             false, // This wipes the history stack so they can't click "back" to get into the dashboard
                       );

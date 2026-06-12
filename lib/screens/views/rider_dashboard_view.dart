@@ -31,7 +31,7 @@ import '../../widgets/aeroride_components.dart';
 import 'support_view.dart';
 import 'directions_route_provider.dart';
 import 'wallet_view.dart';
-import '../role_selection_screen.dart';
+import 'package:aeroride/screens/views/gateway_portal.dart';
 
 enum DashboardStage { searching, rideActive }
 
@@ -1504,7 +1504,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                     if (!context.mounted) return;
                     Navigator.of(context).pushAndRemoveUntil(
                       MaterialPageRoute(
-                          builder: (context) => const RoleSelectionScreen()),
+                          builder: (context) => const AeroRideGatewayPortal()),
                       (route) => false,
                     );
                   },

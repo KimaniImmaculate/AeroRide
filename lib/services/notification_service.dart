@@ -11,9 +11,8 @@ class NotificationService {
 
   Future<void> init() async {
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const ios = DarwinInitializationSettings();
     await _plugin.initialize(
-      const InitializationSettings(android: android, iOS: ios),
+      const InitializationSettings(android: android),
     );
   }
 
@@ -28,13 +27,12 @@ class NotificationService {
       importance: Importance.max,
       priority: Priority.high,
     );
-    const iosDetails = DarwinNotificationDetails();
 
     await _plugin.show(
       0,
       title,
       body,
-      const NotificationDetails(android: androidDetails, iOS: iosDetails),
+      const NotificationDetails(android: androidDetails),
     );
   }
 }

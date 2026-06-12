@@ -98,7 +98,7 @@ class AuthService {
       if (user != null) {
         // Ensure Auth profile has a default name for immediate UI display
         await user.updateDisplayName("Guest Rider");
-        await user.reload();
+        await user.reload(); // Reload to get the updated displayName
 
         UserModel guestUser = UserModel(
           uid: user.uid,
@@ -566,7 +566,8 @@ class AuthService {
 
     // Sync the name back to Firebase Auth if provided and different
     if (user.displayName != nameToUse) {
-      await user.updateDisplayName(nameToUse);
+      await user
+          .updateDisplayName(nameToUse); // Update display name in Firebase Auth
     }
 
     final profile = UserModel(
