@@ -2,10 +2,8 @@ import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:aeroride/models/vehicle_tier_model.dart';
-import 'package:aeroride/screens/views/rider_dashboard_view.dart';
 import 'package:aeroride/widgets/main_layout_wrapper.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:aeroride/utils/currency.dart';
 import 'package:provider/provider.dart';
 import 'package:aeroride/controllers/ride_controller.dart';
 import 'package:aeroride/widgets/aero_welcome_view.dart';
@@ -33,7 +31,7 @@ class _VehicleSelectionScreenState extends State<VehicleSelectionScreen> {
   void _loadMockTiers() {
     _availableTiers = [
       VehicleTier(
-        id: 'tulia', // Synchronized ID
+        id: 'tulia',
         name: 'Tulia',
         description: 'Sustainable, low-profile urban transit.',
         baseFare: 150.0,
@@ -47,7 +45,7 @@ class _VehicleSelectionScreenState extends State<VehicleSelectionScreen> {
         iconPath: 'assets/vitz.png',
       ),
       VehicleTier(
-        id: 'nuru', // Synchronized ID
+        id: 'nuru',
         name: 'Nuru',
         description: 'Elevated workspace travel designed for your comfort.',
         baseFare: 350.0,
@@ -61,7 +59,7 @@ class _VehicleSelectionScreenState extends State<VehicleSelectionScreen> {
         iconPath: 'assets/premio.png',
       ),
       VehicleTier(
-        id: 'pamoja', // Synchronized ID
+        id: 'pamoja',
         name: 'Pamoja',
         description: 'Expansive space for your whole collective.',
         baseFare: 500.0,
@@ -75,7 +73,7 @@ class _VehicleSelectionScreenState extends State<VehicleSelectionScreen> {
         iconPath: 'assets/honda freed.png',
       ),
       VehicleTier(
-        id: 'waziri', // Synchronized ID
+        id: 'waziri',
         name: 'Waziri',
         description: 'Elite flagship command. Unmarked, unbothered.',
         baseFare: 700.0,
@@ -94,151 +92,164 @@ class _VehicleSelectionScreenState extends State<VehicleSelectionScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          image: DecorationImage(
-            image: AssetImage('assets/busy city at night.jpg'),
-            fit: BoxFit.cover,
+      body: Stack(
+        children: [
+          // 1. Cinematic Background Layer
+          Positioned.fill(
+            child: Image.asset(
+              'assets/busy city at night.jpg',
+              fit: BoxFit.cover,
+            ),
           ),
-        ),
-        child: Container(
-          color: Colors.black.withValues(alpha: 0.65),
-          child: SafeArea(
-            child: Column(
-              children: [
-                // Floating Glassmorphic Back Chevron
-                Positioned(
-                  top: MediaQuery.of(context).padding.top + 12,
-                  left: 20,
-                  child: ClipOval(
-                    child: Material(
-                      color: Colors.white.withValues(
-                          alpha: 0.12), // Ultra-fine glass translucent mask
-                      child: InkWell(
-                        onTap: () {
-                          if (Navigator.of(context).canPop()) {
-                            Navigator.of(context).pop();
-                          } else {
-                            // Fallback to root welcome view if no history exists
-                            Navigator.of(context).pushReplacement(
-                              MaterialPageRoute(
-                                  builder: (_) => const AeroWelcomeView()),
-                            );
-                          }
-                        },
-                        child: const Padding(
-                          padding: EdgeInsets.all(12.0),
-                          child: Icon(
-                            Icons
-                                .arrow_back_ios_new_rounded, // Sleek modern geometric chevron
-                            color: Colors.white,
-                            size: 18,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                // Cinematic Typography with Entry Animation
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 40.0),
-                  child: TweenAnimationBuilder<double>(
-                    tween: Tween(begin: 0.0, end: 1.0),
-                    duration: const Duration(milliseconds: 1200),
-                    curve: Curves.easeOutExpo,
-                    builder: (context, value, child) {
-                      return Opacity(
-                        opacity: value,
-                        child: Transform.translate(
-                          offset: Offset(0, 20 * (1 - value)),
-                          child: Text(
-                            "Select Your Vibe",
-                            style: GoogleFonts.urbanist(
-                              color: Colors.white,
-                              fontSize: 32,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 4.0,
+
+          // 2. Dark Luxury Dimming Mask
+          Positioned.fill(
+            child: Container(
+              color: Colors.black.withValues(alpha: 0.65),
+            ),
+          ),
+
+          // 3. Immersive Interactive Core Layout
+          Positioned.fill(
+            child: SafeArea(
+              child: Column(
+                children: [
+                  // Space allocated cleanly for the floating navigation anchor
+                  const SizedBox(height: 56),
+
+                  // Cinematic Title Typography
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 20.0),
+                    child: TweenAnimationBuilder<double>(
+                      tween: Tween(begin: 0.0, end: 1.0),
+                      duration: const Duration(milliseconds: 1200),
+                      curve: Curves.easeOutExpo,
+                      builder: (context, value, child) {
+                        return Opacity(
+                          opacity: value,
+                          child: Transform.translate(
+                            offset: Offset(0, 20 * (1 - value)),
+                            child: Text(
+                              "Select Your Vibe",
+                              style: GoogleFonts.urbanist(
+                                color: Colors.white,
+                                fontSize: 32,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 4.0,
+                              ),
                             ),
                           ),
-                        ),
-                      );
-                    },
+                        );
+                      },
+                    ),
                   ),
-                ),
 
-                // Immersive Full-Viewport Scrolling Hub
-                Expanded(
-                  child: ListView.builder(
-                    physics: const BouncingScrollPhysics(),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 24, vertical: 10),
-                    itemCount: _availableTiers.length,
-                    itemBuilder: (context, index) {
-                      return _AeroVibeCard(
-                        tier: _availableTiers[index],
-                        isSelected:
-                            _selectedTier?.id == _availableTiers[index].id,
-                        onSelected: (tier) =>
-                            setState(() => _selectedTier = tier),
-                      );
-                    },
+                  // Immersive Full-Viewport Scrolling Hub
+                  Expanded(
+                    child: ListView.builder(
+                      physics: const BouncingScrollPhysics(),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 24, vertical: 10),
+                      itemCount: _availableTiers.length,
+                      itemBuilder: (context, index) {
+                        return _AeroVibeCard(
+                          tier: _availableTiers[index],
+                          isSelected:
+                              _selectedTier?.id == _availableTiers[index].id,
+                          onSelected: (tier) =>
+                              setState(() => _selectedTier = tier),
+                        );
+                      },
+                    ),
                   ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(24.0),
-                  child: SizedBox(
-                    width: double.infinity,
-                    height: 72,
-                    child: ElevatedButton(
-                      onPressed: _selectedTier == null
-                          ? null
-                          : () {
-                              // Update the controller with the user's selection
-                              final controller = Provider.of<RideController>(
-                                  context,
-                                  listen: false);
-                              controller.selectedTier = _selectedTier;
 
-                              Navigator.of(context).pushReplacement(
-                                MaterialPageRoute(
-                                  builder: (_) => MainLayoutWrapper(
+                  // Action Confirmation Dock
+                  Padding(
+                    padding: const EdgeInsets.all(24.0),
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: 72,
+                      child: ElevatedButton(
+                        onPressed: _selectedTier == null
+                            ? null
+                            : () {
+                                final controller = Provider.of<RideController>(
+                                    context,
+                                    listen: false);
+                                controller.selectedTier = _selectedTier;
+
+                                Navigator.of(context).pushReplacement(
+                                  MaterialPageRoute(
+                                    builder: (_) => MainLayoutWrapper(
                                       user: FirebaseAuth.instance.currentUser ??
-                                          widget.user),
-                                ),
-                              );
-                            },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: primaryTurquoise,
-                        foregroundColor: Colors.white,
-                        disabledBackgroundColor:
-                            Colors.white.withValues(alpha: 0.2),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
+                                          widget.user,
+                                    ),
+                                  ),
+                                );
+                              },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: primaryTurquoise,
+                          foregroundColor: Colors.white,
+                          disabledBackgroundColor:
+                              Colors.white.withValues(alpha: 0.2),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
                         ),
-                      ),
-                      child: Text(
-                        _selectedTier == null
-                            ? "CHOOSE YOUR RIDE"
-                            : "CONFIRM ${_selectedTier!.name.toUpperCase()}",
-                        style: GoogleFonts.urbanist(
-                          fontWeight: FontWeight.w900,
-                          fontSize: 16,
-                          letterSpacing: 1.0,
+                        child: Text(
+                          _selectedTier == null
+                              ? "CHOOSE YOUR RIDE"
+                              : "CONFIRM ${_selectedTier!.name.toUpperCase()}",
+                          style: GoogleFonts.urbanist(
+                            fontWeight: FontWeight.w900,
+                            fontSize: 16,
+                            letterSpacing: 1.0,
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ), // End of SafeArea
-        ], // End of Stack children
+          ),
+
+          // 4. Secure Floating Navigation Anchor (Safely outside Column, direct child of Stack)
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 12,
+            left: 20,
+            child: ClipOval(
+              child: Material(
+                color: Colors.white.withValues(alpha: 0.12),
+                child: InkWell(
+                  onTap: () {
+                    if (Navigator.of(context).canPop()) {
+                      Navigator.of(context).pop();
+                    } else {
+                      Navigator.of(context).pushReplacement(
+                        MaterialPageRoute(
+                            builder: (_) => const AeroWelcomeView()),
+                      );
+                    }
+                  },
+                  child: const Padding(
+                    padding: EdgeInsets.all(12.0),
+                    child: Icon(
+                      Icons.arrow_back_ios_new_rounded,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-/// A high-end interactive card featuring Y-axis 3D flip mechanics.
 class _AeroVibeCard extends StatefulWidget {
   final VehicleTier tier;
   final bool isSelected;
@@ -269,10 +280,9 @@ class _AeroVibeCardState extends State<_AeroVibeCard> {
         curve: Curves.easeOutBack,
         tween: Tween(begin: 0.0, end: _isFlipped ? math.pi : 0.0),
         builder: (context, angle, child) {
-          // Perspective Transform with Matrix4
           final isBack = angle >= math.pi / 2;
           final matrix = Matrix4.identity()
-            ..setEntry(3, 2, 0.0012) // Depth perspective
+            ..setEntry(3, 2, 0.0012)
             ..rotateY(angle);
 
           return Transform(
@@ -377,19 +387,21 @@ class _AeroVibeCardState extends State<_AeroVibeCard> {
           ),
           const SizedBox(height: 8),
           Expanded(
-            // Added Expanded to prevent overflow
-            child: Text(
-              widget.tier.benefits.join(" • "),
-              textAlign: TextAlign.center,
-              style: GoogleFonts.urbanist(
+            child: Center(
+              child: Text(
+                widget.tier.benefits.join(" • "),
+                textAlign: TextAlign.center,
+                style: GoogleFonts.urbanist(
                   color: Colors.white,
                   fontSize: 13,
-                  fontWeight: FontWeight.w500),
-              maxLines: 2, // Limit to 2 lines
-              overflow: TextOverflow.ellipsis, // Add ellipsis if it overflows
+                  fontWeight: FontWeight.w500,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ),
-          const Divider(color: Colors.white10, height: 16), // Reduced height
+          const Divider(color: Colors.white10, height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
@@ -407,16 +419,22 @@ class _AeroVibeCardState extends State<_AeroVibeCard> {
   Widget _buildPriceMetric(String label, String value) {
     return Column(
       children: [
-        Text(label,
-            style: GoogleFonts.urbanist(
-                color: Colors.white38,
-                fontSize: 9,
-                fontWeight: FontWeight.bold)),
-        Text(value,
-            style: GoogleFonts.urbanist(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.w900)),
+        Text(
+          label,
+          style: GoogleFonts.urbanist(
+            color: Colors.white38,
+            fontSize: 9,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        Text(
+          value,
+          style: GoogleFonts.urbanist(
+            color: Colors.white,
+            fontSize: 16,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
       ],
     );
   }

@@ -3,10 +3,10 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:aeroride/models/user_model.dart';
 import 'package:aeroride/services/firestore_service.dart';
-import 'package:google_sign_in/google_sign_in.dart';
-import 'package:flutter/foundation.dart'; // For debugPrint and kIsWeb
 import 'package:firebase_auth_platform_interface/firebase_auth_platform_interface.dart'
     show FirebaseAuthPlatform;
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:flutter/foundation.dart'; // For debugPrint and kIsWeb
 
 /// A wrapper class to pass both a potential User or an active MFA Session back to your UI
 class AeroRideLoginResult {
@@ -211,11 +211,20 @@ class AuthService {
 
   /// HELPER: Normalizes phone numbers to E.164 format (+254...)
   String _normalizePhone(String phone) {
-    String p = phone.trim();
-    if (p.startsWith('0')) {
-      p = '+254${p.substring(1)}';
+    String p = phone.trim().replaceAll(RegExp(r'\D'), '');
+    // Handle already full format
+    if (p.startsWith('254') && p.length == 12) {
+      return '+$p';
     }
-    return p;
+    // Handle local 07... format
+    if (p.startsWith('0')) {
+      return '+254${p.substring(1)}';
+    }
+    // Handle 7... format
+    if (p.length == 9 && (p.startsWith('7') || p.startsWith('1'))) {
+      return '+254$p';
+    }
+    return phone.startsWith('+') ? phone : '+$p';
   }
 
   // ✨ COMPATIBILITY SHIM: Single-shot signUp for legacy views
@@ -275,23 +284,37 @@ class AuthService {
     try {
       final formattedPhone = _normalizePhone(phoneNumber);
 
+      if (formattedPhone.isEmpty || !formattedPhone.startsWith('+')) {
+        onFailed('Invalid phone number format. Please use +254XXXXXXXXX.');
+        return;
+      }
       if (kIsWeb) {
         final verifier = RecaptchaVerifier(
           auth: FirebaseAuthPlatform.instance,
           container: 'recaptcha-container',
           size: RecaptchaVerifierSize.compact,
         );
-        _webConfirmationResult = await _auth.signInWithPhoneNumber(
-          formattedPhone,
-          verifier,
-        );
-        onCodeSent(_webConfirmationResult!.verificationId);
+
+        try {
+          _webConfirmationResult = await _auth.signInWithPhoneNumber(
+            formattedPhone,
+            verifier,
+          );
+
+          // ✅ FIX: Force the HTML box to close right here on structural success!
+          verifier.clear();
+
+          onCodeSent(_webConfirmationResult!.verificationId);
+        } catch (authError) {
+          verifier.clear(); // Clear on failure too
+          rethrow;
+        }
       } else {
+        // NATIVE MOBILE CHANNELS
         await _auth.verifyPhoneNumber(
           phoneNumber: formattedPhone,
-          verificationCompleted: (PhoneAuthCredential credential) async {
-            // Auto-verification not handled here to enforce manual OTP UI flow
-          },
+          timeout: const Duration(seconds: 60),
+          verificationCompleted: (PhoneAuthCredential credential) async {},
           verificationFailed: (FirebaseAuthException e) {
             onFailed(_authErrorMessage(e));
           },
@@ -302,6 +325,7 @@ class AuthService {
         );
       }
     } catch (e) {
+      debugPrint("Fatal Catch Block Triggered: $e");
       onFailed(
           e is FirebaseAuthException ? _authErrorMessage(e) : e.toString());
     }

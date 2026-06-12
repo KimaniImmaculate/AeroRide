@@ -230,10 +230,18 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
   Future<void> _fetchUserProfile() async {
     try {
-      if (widget.user?.uid == null) return;
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
 
-      final profile = await _firestoreService.getUserProfile(widget.user.uid);
-      if (mounted) setState(() => _currentUserModel = profile);
+      final profile = await _firestoreService.getUserProfile(user.uid);
+      if (mounted) {
+        setState(() {
+          _currentUserModel = profile;
+          if (_mpesaPhoneController.text.isEmpty && user.phoneNumber != null) {
+            _mpesaPhoneController.text = user.phoneNumber!;
+          }
+        });
+      }
     } catch (e) {
       debugPrint('RiderDashboard: Failed to fetch profile: $e');
     }
@@ -863,7 +871,11 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) {
-            _showAuthRequiredDialog();
+            _showAuthRequiredDialog().then((_) {
+              setState(() {
+                _hasTriggeredAuthCheck = false;
+              });
+            });
           }
         });
       }
@@ -919,27 +931,31 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       _currentRideStatus = 'processing_pin';
     });
 
-    // Wait 7 seconds to assume the driver is inputting the PIN
-    await Future.delayed(const Duration(seconds: 7));
+    try {
+      // Wait 7 seconds to assume the driver is inputting the PIN
+      await Future.delayed(const Duration(seconds: 7));
 
-    // MANUAL SIGNAL: Update Firestore to 'started'.
-    // This triggers SimulationService to begin Leg 3 and the Taximeter to show.
-    await FirebaseFirestore.instance
-        .collection('rides')
-        .doc(_currentRideDocumentId)
-        .update({
-      'status': 'started',
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-
-    if (mounted) {
-      setState(() {
-        _isProcessingPinInput = false;
-        _currentRideState = RideState.inTransit;
-        isArrived = false;
-        _currentRideStatus = 'started';
-        isTripStarted = true;
+      // MANUAL SIGNAL: Update Firestore to 'started'.
+      // This triggers SimulationService to begin Leg 3 and the Taximeter to show.
+      await FirebaseFirestore.instance
+          .collection('rides')
+          .doc(_currentRideDocumentId!)
+          .update({
+        'status': 'started',
+        'updatedAt': FieldValue.serverTimestamp(),
       });
+    } catch (e) {
+      debugPrint("PIN Verification simulation failed: $e");
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isProcessingPinInput = false;
+          _currentRideState = RideState.inTransit;
+          isArrived = false;
+          _currentRideStatus = 'started';
+          isTripStarted = true;
+        });
+      }
     }
   }
 
@@ -2355,9 +2371,9 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
   }
 
   // =========================================================================
-  // DYNAMIC FLOATING MULTI-AUTH DIALOG (EMAIL/PASSWORD/MFA + GOOGLE INTERCEPT)
-  // =========================================================================
-  void _showAuthRequiredDialog() {
+// DYNAMIC FLOATING MULTI-AUTH DIALOG (EMAIL/PASSWORD/MFA + GOOGLE INTERCEPT)
+// =========================================================================
+  Future<void> _showAuthRequiredDialog() async {
     final TextEditingController emailController = TextEditingController();
     final TextEditingController passwordController = TextEditingController();
     final TextEditingController nameController = TextEditingController();
@@ -2368,7 +2384,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
     bool isSignUpMode = true;
     bool isProcessingAuth = false;
-    bool isWaitingForSignupOtp = false; // Corrected variable name
+    bool isWaitingForSignupOtp = false;
     String currentVerificationId = '';
 
     int resendCountdown = 0;
@@ -2376,7 +2392,8 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
     // Multi-Factor UI Tracking Toggles
     bool isMfaChallengeActive = false;
-    MultiFactorResolver? activeMfaResolver;
+    dynamic
+        activeMfaResolver; // Replaced explicit MultiFactorResolver if types require flexible mapping
     String? activeMfaVerificationId;
 
     // Instance wrapper accessing your newly upgraded AuthService provider
@@ -2439,10 +2456,14 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
           }
 
           final GoogleSignInAuthentication googleAuth =
-              googleUser.authentication;
+              await googleUser.authentication;
+
+          // Fetch the Authorization Access Token using the modern v7+ client layout
+          final clientAuth = await googleUser.authorizationClient
+              .authorizeScopes(['email', 'profile']);
+
           final AuthCredential credential = GoogleAuthProvider.credential(
-            accessToken:
-                null, // Modern package variants deliver idToken payloads securely out-of-the-box
+            accessToken: clientAuth.accessToken,
             idToken: googleAuth.idToken,
           );
 
@@ -2496,561 +2517,708 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       }
     }
 
-    // Localized variables initialized with your state defaults
-    // This guarantees the StatefulBuilder switches views instantly on screen.
-    bool localIsSignUpMode = isSignUpMode;
-    bool localIsProcessingAuth = isProcessingAuth;
-    bool localIsMfaActive = isMfaChallengeActive;
+    // Handle standard Email/Password Authentication Submit Actions
+    Future<void> _handleEmailPasswordSubmit(Function setDialogState) async {
+      if (emailController.text.trim().isEmpty ||
+          passwordController.text.trim().isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please fill in all required fields.')),
+        );
+        return;
+      }
 
-    showDialog(
-      context: context,
-      barrierDismissible: !localIsProcessingAuth,
-      builder: (dialogContext) {
-        return StatefulBuilder(
-          builder: (statefulContext, setDialogState) {
-            return Dialog(
-              elevation: 16,
-              insetPadding:
-                  const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24)),
-              child: Container(
-                constraints: const BoxConstraints(maxWidth: 420),
-                child: SingleChildScrollView(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24.0),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        // Header Navigation Actions
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Icon(
-                              localIsMfaActive
-                                  ? Icons.lock_person_outlined
-                                  : Icons.shield_outlined,
-                              color: Colors.black,
-                              size: 28,
-                            ),
-                            IconButton(
-                              onPressed: localIsProcessingAuth
-                                  ? null
-                                  : () => Navigator.pop(dialogContext),
-                              icon: const Icon(Icons.close, color: Colors.grey),
-                            )
-                          ],
-                        ),
-                        const SizedBox(height: 12),
+      setDialogState(() => isProcessingAuth = true);
 
-                        // =========================================================================
-                        // PATHWAY A: MFA OTP SMS INTERCEPT CONTROLS
-                        // =========================================================================
-                        if (localIsMfaActive) ...[
-                          const Text(
-                            'Two-Step Verification 🔒',
-                            style: TextStyle(
-                                fontWeight: FontWeight.w900,
-                                fontSize: 22,
-                                letterSpacing: -0.5),
-                          ),
-                          const SizedBox(height: 6),
-                          const Text(
-                            'A security message holding a 6-digit verification security code has been routed to your registered phone number factor.',
-                            style: TextStyle(color: Colors.grey, fontSize: 14),
-                          ),
-                          const SizedBox(height: 24),
-                          TextField(
-                            controller: mfaSmsController,
-                            keyboardType: TextInputType.number,
-                            maxLength: 6,
-                            style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: 6),
-                            textAlign: TextAlign.center,
-                            decoration: InputDecoration(
-                              hintText: '000000',
-                              counterText: '',
-                              hintStyle: TextStyle(
-                                  color: Colors.grey.shade300,
-                                  letterSpacing: 6),
-                              prefixIcon: const Icon(Icons.sms_outlined),
-                              border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12)),
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          Center(
-                            child: TextButton(
-                              onPressed: (resendCountdown > 0 ||
-                                      isProcessingAuth)
-                                  ? null
-                                  : () async {
-                                      setDialogState(
-                                          () => isProcessingAuth = true);
+      try {
+        if (isSignUpMode) {
+          // Complete Custom Sign-Up Registration Logic Flow
+          await FirebaseAuth.instance.createUserWithEmailAndPassword(
+            email: emailController.text.trim(),
+            password: passwordController.text.trim(),
+          );
+          // If your database requires name/phone write ops, append them here
+        } else {
+          // Complete Sign-In Logic Flow
+          await FirebaseAuth.instance.signInWithEmailAndPassword(
+            email: emailController.text.trim(),
+            password: passwordController.text.trim(),
+          );
+        }
 
-                                      await authService.signUpWithPhoneOtp(
-                                        phoneNumber:
-                                            phoneController.text.trim(),
-                                        onCodeSent: (verId) {
-                                          setDialogState(() {
-                                            currentVerificationId = verId;
-                                            isProcessingAuth = false;
-                                          });
-                                          startCountdown(setDialogState);
-                                        },
-                                        onFailed: (err) {
-                                          setDialogState(
-                                              () => isProcessingAuth = false);
-                                          ScaffoldMessenger.of(context)
-                                              .showSnackBar(
-                                                  SnackBar(content: Text(err)));
-                                        },
-                                      );
-                                    },
-                              child: Text(
-                                resendCountdown > 0
-                                    ? 'Resend code in ${resendCountdown}s'
-                                    : 'Resend SMS Code',
-                                style: TextStyle(
-                                  color: resendCountdown > 0
-                                      ? Colors.grey
-                                      : Colors.blueAccent,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                          ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.black,
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12)),
-                            ),
-                            onPressed: localIsProcessingAuth
-                                ? null
-                                : () async {
-                                    final typedCode =
-                                        mfaSmsController.text.trim();
-                                    if (typedCode.length < 6) {
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                        const SnackBar(
-                                            content: Text(
-                                                'Please enter the full 6-digit code.')),
-                                      );
-                                      return;
-                                    }
+        if (context.mounted) Navigator.pop(context);
+        final driverIdStr = _selectedDriver?['id']?.toString() ?? '';
+        await _executeActualRideBooking(
+            _selectedDriver!, _driverLocation!, driverIdStr);
+      } on FirebaseAuthException catch (e) {
+        // Catch Multi-Factor Challenge Interruptions
+        if (e.code == 'multi-factor-auth-required') {
+          setDialogState(() {
+            // Use the correct exception type to access resolver
+            isMfaChallengeActive = true;
+            activeMfaResolver = (e as FirebaseAuthMultiFactorException)
+                .resolver; // Used to resolve multi-factor sign-in challenges
+            isProcessingAuth = false;
+          });
+          // Proceed with triggering SMS verification codes here via resolver details
+        } else {
+          setDialogState(() => isProcessingAuth = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(e.message ?? 'Authentication failed.')),
+          );
+        }
+      } catch (e) {
+        setDialogState(() => isProcessingAuth = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    }
 
-                                    setDialogState(
-                                        () => localIsProcessingAuth = true);
-                                    try {
-                                      await authService.completeMfaVerification(
-                                        resolver: activeMfaResolver!,
-                                        verificationId:
-                                            activeMfaVerificationId!,
-                                        smsCode: typedCode,
-                                      );
-
-                                      if (context.mounted) {
-                                        Navigator.pop(dialogContext);
-                                      }
-
-                                      final driverIdStr =
-                                          _selectedDriver?['id']?.toString() ??
-                                              '';
-                                      await _executeActualRideBooking(
-                                          _selectedDriver!,
-                                          _driverLocation!,
-                                          driverIdStr);
-                                    } catch (error) {
-                                      setDialogState(
-                                          () => localIsProcessingAuth = false);
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                        SnackBar(
-                                            content: Text(error
-                                                .toString()
-                                                .replaceAll('Exception:', ''))),
-                                      );
-                                    }
-                                  },
-                            child: localIsProcessingAuth
-                                ? const SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                        color: Colors.white, strokeWidth: 2))
-                                : const Text('Verify Code & Complete Booking',
-                                    style: TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16)),
-                          ),
-                        ]
-                        // =========================================================================
-                        // PATHWAY B: STANDARD REGISTRATION & LOGIN FLOW FORMFIELDS
-                        // =========================================================================
-                        else ...[
-                          Text(
-                            localIsSignUpMode
-                                ? 'Secure Your AeroRide 🚀'
-                                : 'Welcome Back 👋',
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w900,
-                                fontSize: 22,
-                                letterSpacing: -0.5),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            localIsSignUpMode
-                                ? 'Create a quick account to finish booking.'
-                                : 'Log into your account to authorize this ride request.',
-                            style: const TextStyle(
-                                color: Colors.grey, fontSize: 14),
-                          ),
-                          const SizedBox(height: 20),
-
-                          // Google Anchor Integration
-                          OutlinedButton(
-                            style: OutlinedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              side: BorderSide(color: Colors.grey.shade300),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12)),
-                            ),
-                            onPressed: localIsProcessingAuth
-                                ? null
-                                : () => _handleGoogleAuth(setDialogState),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Icon(Icons.account_circle_outlined,
-                                    size: 20, color: Colors.grey),
-                                const SizedBox(width: 12),
-                                Text(
-                                  localIsSignUpMode
-                                      ? 'Continue with Google'
-                                      : 'Sign In with Google',
-                                  style: const TextStyle(
-                                      color: Colors.black,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 16),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-
-                          // Form Navigation Segment Controls
+    try {
+      await showDialog(
+        context: context,
+        barrierDismissible: !isProcessingAuth,
+        builder: (dialogContext) {
+          return StatefulBuilder(
+            builder: (statefulContext, setDialogState) {
+              return Dialog(
+                elevation: 16,
+                insetPadding:
+                    const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24)),
+                child: Container(
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  child: SingleChildScrollView(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24.0),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // Header Navigation Actions
                           Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Expanded(
-                                child: TextButton(
-                                  onPressed: () => setDialogState(
-                                      () => localIsSignUpMode = true),
-                                  style: TextButton.styleFrom(
-                                    backgroundColor: localIsSignUpMode
-                                        ? Colors.grey.shade100
-                                        : Colors.transparent,
-                                  ),
-                                  child: Text('Sign Up',
-                                      style: TextStyle(
-                                          fontWeight: localIsSignUpMode
-                                              ? FontWeight.bold
-                                              : FontWeight.normal,
-                                          color: localIsSignUpMode
-                                              ? Colors.black
-                                              : Colors.grey)),
-                                ),
+                              Icon(
+                                isMfaChallengeActive
+                                    ? Icons.lock_person_outlined
+                                    : Icons.shield_outlined,
+                                color: Colors.black,
+                                size: 28,
                               ),
-                              Expanded(
-                                child: TextButton(
-                                  onPressed: () => setDialogState(
-                                      () => localIsSignUpMode = false),
-                                  style: TextButton.styleFrom(
-                                    backgroundColor: !localIsSignUpMode
-                                        ? Colors.grey.shade100
-                                        : Colors.transparent,
-                                  ),
-                                  child: Text('Log In',
-                                      style: TextStyle(
-                                          fontWeight: !localIsSignUpMode
-                                              ? FontWeight.bold
-                                              : FontWeight.normal,
-                                          color: !localIsSignUpMode
-                                              ? Colors.black
-                                              : Colors.grey)),
-                                ),
-                              ),
+                              IconButton(
+                                onPressed: isProcessingAuth
+                                    ? null
+                                    : () => Navigator.pop(dialogContext),
+                                icon:
+                                    const Icon(Icons.close, color: Colors.grey),
+                              )
                             ],
                           ),
-                          const SizedBox(height: 16),
+                          const SizedBox(height: 12),
 
-                          if (localIsSignUpMode) ...[
-                            TextField(
-                              controller: nameController,
-                              textCapitalization: TextCapitalization.words,
-                              decoration: InputDecoration(
-                                labelText: 'Full Name',
-                                prefixIcon: const Icon(Icons.person_outline),
-                                border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(12)),
-                              ),
+                          // =========================================================================
+                          // PATHWAY A: MFA OTP SMS INTERCEPT CONTROLS
+                          // =========================================================================
+                          if (isMfaChallengeActive) ...[
+                            const Text(
+                              'Two-Step Verification 🔒',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 22,
+                                  letterSpacing: -0.5),
                             ),
-                            const SizedBox(height: 12),
-                            TextField(
-                              controller: phoneController,
-                              keyboardType: TextInputType.phone,
-                              decoration: InputDecoration(
-                                labelText: 'Phone Number',
-                                prefixIcon: const Icon(Icons.phone_outlined),
-                                border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(12)),
-                              ),
+                            const SizedBox(height: 6),
+                            const Text(
+                              'A security message holding a 6-digit verification security code has been routed to your registered phone number factor.',
+                              style:
+                                  TextStyle(color: Colors.grey, fontSize: 14),
                             ),
-                            const SizedBox(height: 12),
-                          ],
-
-                          if (isWaitingForSignupOtp) ...[
-                            // Use the correct state variable
-                            const Text('Verify Your Phone 📱',
-                                style: TextStyle(
-                                    fontWeight: FontWeight.bold, fontSize: 18)),
-                            const SizedBox(height: 8),
+                            const SizedBox(height: 24),
                             TextField(
                               controller: mfaSmsController,
                               keyboardType: TextInputType.number,
-                              decoration: const InputDecoration(
-                                labelText: 'Enter 6-Digit SMS Code',
-                                prefixIcon: Icon(Icons.sms_outlined),
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                          ] else ...[
-                            TextField(
-                              controller: emailController,
+                              maxLength: 6,
+                              style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 6),
+                              textAlign: TextAlign.center,
                               decoration: InputDecoration(
-                                labelText: localIsSignUpMode
-                                    ? 'Email Address'
-                                    : 'Email or Phone Number',
-                                prefixIcon: const Icon(Icons.mail_outline),
+                                hintText: '000000',
+                                counterText: '',
+                                hintStyle: TextStyle(
+                                    color: Colors.grey.shade300,
+                                    letterSpacing: 6),
+                                prefixIcon: const Icon(Icons.sms_outlined),
                                 border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(12)),
                               ),
                             ),
-                            const SizedBox(height: 12),
-                            TextField(
-                              controller: passwordController,
-                              obscureText: true,
-                              decoration: InputDecoration(
-                                labelText: 'Password',
-                                prefixIcon: const Icon(Icons.lock_outline),
-                                border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(12)),
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 20),
-
-                          ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.black,
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12)),
-                            ),
-                            onPressed: (localIsProcessingAuth ||
-                                    isProcessingAuth)
-                                ? null
-                                : () async {
-                                    final email = emailController.text.trim();
-                                    final password =
-                                        passwordController.text.trim();
-                                    final name = nameController.text.trim();
-                                    final phone = phoneController.text.trim();
-
-                                    // 1. Handle OTP Verification Leg
-                                    if (isWaitingForSignupOtp) {
-                                      setDialogState(
-                                          () => isProcessingAuth = true);
-                                      try {
-                                        await authService
-                                            .verifyOtpAndCompleteSignup(
-                                          verificationId: currentVerificationId,
-                                          smsCode: mfaSmsController.text,
-                                          name: name,
-                                          email: email,
-                                          password: password,
-                                        );
-                                        if (context.mounted)
-                                          Navigator.pop(dialogContext);
-                                        await _executeActualRideBooking(
-                                            _selectedDriver!,
-                                            _driverLocation!,
-                                            _selectedDriver?['id'] ?? '');
-                                      } catch (e) {
+                            const SizedBox(height: 10),
+                            Center(
+                              child: TextButton(
+                                onPressed: (resendCountdown > 0 ||
+                                        isProcessingAuth)
+                                    ? null
+                                    : () async {
                                         setDialogState(
-                                            () => isProcessingAuth = false);
-                                        ScaffoldMessenger.of(context)
-                                            .showSnackBar(SnackBar(
-                                                content: Text(e.toString())));
-                                      }
-                                      return;
-                                    }
+                                            () => isProcessingAuth = true);
 
-                                    // 2. Handle Initial Auth Leg
-                                    if (email.isEmpty || password.isEmpty)
-                                      return;
-
-                                    setDialogState(
-                                        () => localIsProcessingAuth = true);
-                                    try {
-                                      if (localIsSignUpMode) {
                                         await authService.signUpWithPhoneOtp(
-                                          phoneNumber: phone,
+                                          phoneNumber:
+                                              phoneController.text.trim(),
                                           onCodeSent: (verId) {
                                             setDialogState(() {
                                               currentVerificationId = verId;
-                                              isWaitingForSignupOtp = true;
-                                              localIsProcessingAuth = false;
+                                              isProcessingAuth = false;
                                             });
                                             startCountdown(setDialogState);
                                           },
                                           onFailed: (err) {
-                                            setDialogState(() =>
-                                                localIsProcessingAuth = false);
+                                            setDialogState(
+                                                () => isProcessingAuth = false);
                                             ScaffoldMessenger.of(context)
                                                 .showSnackBar(SnackBar(
                                                     content: Text(err)));
                                           },
                                         );
-                                      } else {
-                                        dynamic loginResult = await authService
-                                            .login(email, password);
-
-                                        if (loginResult.isMfaRequired) {
-                                          String verificationId =
-                                              await authService
-                                                  .sendMfaVerificationSms(
-                                            resolver: loginResult.mfaResolver!,
-                                          );
-
-                                          setDialogState(() {
-                                            localIsProcessingAuth = false;
-                                            localIsMfaActive = true;
-                                            activeMfaResolver =
-                                                loginResult.mfaResolver;
-                                            activeMfaVerificationId =
-                                                verificationId;
-                                          });
-                                        } else {
-                                          if (context.mounted) {
-                                            Navigator.pop(dialogContext);
-                                          }
-                                          final driverIdStr =
-                                              _selectedDriver?['id']
-                                                      ?.toString() ??
-                                                  '';
-                                          await _executeActualRideBooking(
-                                              _selectedDriver!,
-                                              _driverLocation!,
-                                              driverIdStr);
-                                        }
-                                      }
-                                    } on FirebaseAuthException catch (e) {
-                                      setDialogState(
-                                          () => localIsProcessingAuth = false);
-                                      if (e.code == 'email-already-in-use' &&
-                                          localIsSignUpMode) {
-                                        if (!context.mounted) return;
-                                        bool? proceedWithLogin =
-                                            await showDialog<bool>(
-                                          context: context,
-                                          builder: (dialogCtx) => AlertDialog(
-                                            shape: RoundedRectangleBorder(
-                                                borderRadius:
-                                                    BorderRadius.circular(16)),
-                                            title: const Text(
-                                                'Account Already Exists'),
-                                            content: Text(
-                                                'The email "$email" is already registered. Continue by logging into that account instead?'),
-                                            actions: [
-                                              TextButton(
-                                                onPressed: () => Navigator.pop(
-                                                    dialogCtx, false),
-                                                child: const Text('Cancel',
-                                                    style: TextStyle(
-                                                        color: Colors.grey)),
-                                              ),
-                                              ElevatedButton(
-                                                style: ElevatedButton.styleFrom(
-                                                    backgroundColor:
-                                                        Colors.black),
-                                                onPressed: () => Navigator.pop(
-                                                    dialogCtx, true),
-                                                child: const Text(
-                                                    'Continue & Log In',
-                                                    style: TextStyle(
-                                                        color: Colors.white)),
-                                              ),
-                                            ],
-                                          ),
+                                      },
+                                child: Text(
+                                  resendCountdown > 0
+                                      ? 'Resend code in ${resendCountdown}s'
+                                      : 'Resend SMS Code',
+                                  style: TextStyle(
+                                    color: resendCountdown > 0
+                                        ? Colors.grey
+                                        : Colors.blueAccent,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                            ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.black,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 16),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
+                              onPressed: isProcessingAuth
+                                  ? null
+                                  : () async {
+                                      final typedCode =
+                                          mfaSmsController.text.trim();
+                                      if (typedCode.length < 6) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          const SnackBar(
+                                              content: Text(
+                                                  'Please enter the full 6-digit code.')),
                                         );
-                                        if (proceedWithLogin == true) {
-                                          setDialogState(
-                                              () => localIsSignUpMode = false);
+                                        return;
+                                      }
+
+                                      // 2. Handle Initial Auth Leg (Email/Password check for login flow)
+                                      if (!isWaitingForSignupOtp &&
+                                          !isSignUpMode &&
+                                          (emailController.text
+                                                  .trim()
+                                                  .isEmpty ||
+                                              passwordController.text
+                                                  .trim()
+                                                  .isEmpty)) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          const SnackBar(content: Text(
+                                              // This is for login mode, not signup
+                                              'Please enter your email and password.')),
+                                        );
+                                        return;
+                                      }
+
+                                      setDialogState(
+                                          () => isProcessingAuth = true);
+                                      try {
+                                        await authService
+                                            .completeMfaVerification(
+                                          resolver: activeMfaResolver!,
+                                          verificationId:
+                                              activeMfaVerificationId!,
+                                          smsCode: typedCode,
+                                        );
+
+                                        if (context.mounted) {
+                                          Navigator.pop(dialogContext);
                                         }
-                                      } else {
+
+                                        final driverIdStr =
+                                            _selectedDriver?['id']
+                                                    ?.toString() ??
+                                                '';
+                                        await _executeActualRideBooking(
+                                            _selectedDriver!,
+                                            _driverLocation!,
+                                            driverIdStr);
+                                      } catch (error) {
+                                        setDialogState(
+                                            () => isProcessingAuth = false);
                                         ScaffoldMessenger.of(context)
                                             .showSnackBar(
                                           SnackBar(
-                                              content: Text(e.message ??
-                                                  'An auth error occurred.')),
+                                              content: Text(error
+                                                  .toString()
+                                                  .replaceAll(
+                                                      'Exception:', ''))),
                                         );
                                       }
-                                    } catch (e) {
+                                    },
+                              child: isProcessingAuth
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                          color: Colors.white, strokeWidth: 2))
+                                  : const Text('Verify Code & Complete Booking',
+                                      style: TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16)),
+                            ),
+                          ]
+                          // =========================================================================
+                          // PATHWAY B: STANDARD REGISTRATION & LOGIN FLOW FORMFIELDS
+                          // =========================================================================
+                          else ...[
+                            Text(
+                              isSignUpMode
+                                  ? 'Secure Your AeroRide 🚀'
+                                  : 'Welcome Back 👋',
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 22,
+                                  letterSpacing: -0.5),
+                            ),
+                            const SizedBox(height: 12),
+                            // Form Navigation Segment Controls
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextButton(
+                                    onPressed: () => setDialogState(
+                                        () => isSignUpMode = true),
+                                    style: TextButton.styleFrom(
+                                      backgroundColor: isSignUpMode
+                                          ? Colors.grey.shade100
+                                          : Colors.transparent,
+                                    ),
+                                    child: Text('Sign Up',
+                                        style: TextStyle(
+                                            fontWeight: isSignUpMode
+                                                ? FontWeight.bold
+                                                : FontWeight.normal,
+                                            color: isSignUpMode
+                                                ? Colors.black
+                                                : Colors.grey)),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: TextButton(
+                                    onPressed: () => setDialogState(
+                                        () => isSignUpMode = false),
+                                    style: TextButton.styleFrom(
+                                      backgroundColor: !isSignUpMode
+                                          ? Colors.grey.shade100
+                                          : Colors.transparent,
+                                    ),
+                                    child: Text('Log In',
+                                        style: TextStyle(
+                                            fontWeight: !isSignUpMode
+                                                ? FontWeight.bold
+                                                : FontWeight.normal,
+                                            color: !isSignUpMode
+                                                ? Colors.black
+                                                : Colors.grey)),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 16),
+
+                            if (isSignUpMode) ...[
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.green.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Text(
+                                  '🚀 Highly Recommended for secure payments',
+                                  style: TextStyle(
+                                      color: Colors.green,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              TextField(
+                                controller: phoneController,
+                                keyboardType: TextInputType.phone,
+                                decoration: InputDecoration(
+                                  labelText: 'Phone Number (Verified via SMS)',
+                                  prefixIcon: const Icon(Icons.phone_outlined,
+                                      color: Colors.green),
+                                  border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              TextField(
+                                controller: nameController,
+                                textCapitalization: TextCapitalization.words,
+                                decoration: InputDecoration(
+                                  labelText: 'Full Name',
+                                  prefixIcon: const Icon(Icons.person_outline),
+                                  border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                            ],
+
+                            if (isWaitingForSignupOtp) ...[
+                              // Use the correct state variable
+                              const Text('Verify Your Phone 📱',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 18)),
+                              const SizedBox(height: 8),
+                              TextField(
+                                controller: mfaSmsController,
+                                keyboardType: TextInputType.number,
+                                decoration: const InputDecoration(
+                                  labelText: 'Enter 6-Digit SMS Code',
+                                  prefixIcon: Icon(Icons.sms_outlined),
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+                            ] else ...[
+                              TextField(
+                                controller: emailController,
+                                decoration: InputDecoration(
+                                  labelText: isSignUpMode
+                                      ? 'Email Address'
+                                      : 'Email or Phone Number',
+                                  prefixIcon: const Icon(Icons.mail_outline),
+                                  border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              TextField(
+                                controller: passwordController,
+                                obscureText: true,
+                                decoration: InputDecoration(
+                                  labelText: 'Password',
+                                  prefixIcon: const Icon(Icons.lock_outline),
+                                  border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 16),
+
+                            if (!isWaitingForSignupOtp) ...[
+                              const Center(
+                                child: Text('OR',
+                                    style: TextStyle(
+                                        color: Colors.grey,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold)),
+                              ),
+                              const SizedBox(height: 16),
+                              // Google Anchor Integration (Secondary)
+                              OutlinedButton(
+                                style: OutlinedButton.styleFrom(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 14),
+                                  side: BorderSide(color: Colors.grey.shade300),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                ),
+                                onPressed: isProcessingAuth
+                                    ? null
+                                    : () => _handleGoogleAuth(setDialogState),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    const Icon(Icons.account_circle_outlined,
+                                        size: 20, color: Colors.grey),
+                                    const SizedBox(width: 12),
+                                    Text(
+                                      isSignUpMode
+                                          ? 'Continue with Google'
+                                          : 'Sign In with Google',
+                                      style: const TextStyle(
+                                          color: Colors.black,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+
+                            const SizedBox(height: 20),
+
+                            ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.black,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 16),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
+                              onPressed: isProcessingAuth
+                                  ? null
+                                  : () async {
+                                      final email = emailController.text.trim();
+                                      final password =
+                                          passwordController.text.trim();
+                                      final name = nameController.text.trim();
+                                      final phone = phoneController.text.trim();
+
+                                      // 🛡️ UI Validation: Prevent auth/argument-error from empty strings
+                                      if (isSignUpMode && phone.isEmpty) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          const SnackBar(
+                                              content: Text(
+                                                  'Please enter your phone number to receive a code.')),
+                                        );
+                                        return;
+                                      }
+
+                                      // 1. Handle OTP Verification Leg
+                                      if (isWaitingForSignupOtp) {
+                                        final otpCode =
+                                            mfaSmsController.text.trim();
+                                        if (otpCode.isEmpty ||
+                                            otpCode.length < 6) {
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                            const SnackBar(
+                                                content: Text(
+                                                    'Please enter the 6-digit code sent to your phone.')),
+                                          );
+                                          return;
+                                        }
+
+                                        setDialogState(
+                                            () => isProcessingAuth = true);
+                                        try {
+                                          await authService
+                                              .verifyOtpAndCompleteSignup(
+                                            verificationId:
+                                                currentVerificationId,
+                                            smsCode: otpCode,
+                                            name: name,
+                                            email: email,
+                                            password: password,
+                                          );
+                                          if (context.mounted)
+                                            Navigator.pop(dialogContext);
+
+                                          if (context.mounted) {
+                                            await _fetchUserProfile();
+                                          }
+
+                                          await _executeActualRideBooking(
+                                              _selectedDriver!,
+                                              _driverLocation!,
+                                              _selectedDriver?['id'] ?? '');
+                                        } catch (e) {
+                                          setDialogState(
+                                              () => isProcessingAuth = false);
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(SnackBar(
+                                                  content: Text(e.toString())));
+                                        }
+                                        return;
+                                      }
+
+                                      // 2. Handle Initial Auth Leg (for login mode)
+                                      if (!isSignUpMode &&
+                                          (emailController.text
+                                                  .trim()
+                                                  .isEmpty ||
+                                              passwordController.text
+                                                  .trim()
+                                                  .isEmpty)) return;
+
                                       setDialogState(
-                                          () => localIsProcessingAuth = false);
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                        SnackBar(
-                                            content: Text(e
-                                                .toString()
-                                                .replaceAll('Exception:', ''))),
-                                      );
-                                    }
-                                  },
-                            child: localIsProcessingAuth
-                                ? const SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                        color: Colors.white, strokeWidth: 2))
-                                : Text(
-                                    localIsSignUpMode
-                                        ? 'Confirm Account & Book Ride'
-                                        : 'Secure Login & Book Ride',
-                                    style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16)),
-                          ),
-                        ],
-                        const SizedBox(height: 8),
-                      ], // Closes Column children
-                    ), // Closes Column
-                  ), // Closes Padding
-                ), // Closes SingleChildScrollView
-              ), // Closes Container
-            ); // Closes Dialog
-          }, // Closes StatefulBuilder builder
-        ); // Closes StatefulBuilder
-      }, // Closes showDialog builder
-    );
+                                          () => isProcessingAuth = true);
+                                      try {
+                                        if (isSignUpMode) {
+                                          await authService.signUpWithPhoneOtp(
+                                            phoneNumber: phone,
+                                            onCodeSent: (verId) {
+                                              setDialogState(() {
+                                                currentVerificationId = verId;
+                                                isWaitingForSignupOtp = true;
+                                                isProcessingAuth = false;
+                                              });
+                                              startCountdown(setDialogState);
+                                            },
+                                            onFailed: (err) {
+                                              setDialogState(() =>
+                                                  isProcessingAuth = false);
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(SnackBar(
+                                                      content: Text(err)));
+                                            },
+                                          );
+                                        } else {
+                                          dynamic loginResult =
+                                              await authService.login(
+                                                  email, password);
+
+                                          if (loginResult.isMfaRequired) {
+                                            String verificationId =
+                                                await authService
+                                                    .sendMfaVerificationSms(
+                                              resolver:
+                                                  loginResult.mfaResolver!,
+                                            );
+
+                                            setDialogState(() {
+                                              isProcessingAuth = false;
+                                              isMfaChallengeActive = true;
+                                              activeMfaResolver =
+                                                  loginResult.mfaResolver;
+                                              activeMfaVerificationId =
+                                                  verificationId;
+                                            });
+                                          } else {
+                                            if (context.mounted) {
+                                              Navigator.pop(dialogContext);
+                                            }
+
+                                            if (context.mounted) {
+                                              await _fetchUserProfile();
+                                            }
+
+                                            final driverIdStr =
+                                                _selectedDriver?['id']
+                                                        ?.toString() ??
+                                                    '';
+                                            await _executeActualRideBooking(
+                                                _selectedDriver!,
+                                                _driverLocation!,
+                                                driverIdStr);
+                                          }
+                                        }
+                                      } on FirebaseAuthException catch (e) {
+                                        setDialogState(
+                                            () => isProcessingAuth = false);
+                                        if (e.code == 'email-already-in-use' &&
+                                            isSignUpMode) {
+                                          if (!context.mounted) return;
+                                          bool? proceedWithLogin =
+                                              await showDialog<bool>(
+                                            context: context,
+                                            builder: (dialogCtx) => AlertDialog(
+                                              shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                          16)),
+                                              title: const Text(
+                                                  'Account Already Exists'),
+                                              content: Text(
+                                                  'The email "$email" is already registered. Continue by logging into that account instead?'),
+                                              actions: [
+                                                TextButton(
+                                                  onPressed: () =>
+                                                      Navigator.pop(
+                                                          dialogCtx, false),
+                                                  child: const Text('Cancel',
+                                                      style: TextStyle(
+                                                          color: Colors.grey)),
+                                                ),
+                                                ElevatedButton(
+                                                  style:
+                                                      ElevatedButton.styleFrom(
+                                                          backgroundColor:
+                                                              Colors.black),
+                                                  onPressed: () =>
+                                                      Navigator.pop(
+                                                          dialogCtx, true),
+                                                  child: const Text(
+                                                      'Continue & Log In',
+                                                      style: TextStyle(
+                                                          color: Colors.white)),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+                                          if (proceedWithLogin == true) {
+                                            setDialogState(
+                                                () => isSignUpMode = false);
+                                          }
+                                        } else {
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                            SnackBar(
+                                                content: Text(e.message ??
+                                                    'An auth error occurred.')),
+                                          );
+                                        }
+                                      } catch (e) {
+                                        setDialogState(
+                                            () => isProcessingAuth = false);
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          SnackBar(
+                                              content: Text(e
+                                                  .toString()
+                                                  .replaceAll(
+                                                      'Exception:', ''))),
+                                        );
+                                      }
+                                    },
+                              child: isProcessingAuth
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                          color: Colors.white, strokeWidth: 2))
+                                  : Text(
+                                      isSignUpMode
+                                          ? 'Confirm Account & Book Ride'
+                                          : 'Secure Login & Book Ride',
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16)),
+                            ),
+                          ],
+                          const SizedBox(height: 8),
+                        ], // Closes Column children
+                      ), // Closes Column
+                    ), // Closes Padding
+                  ), // Closes SingleChildScrollView
+                ), // Closes Container
+              ); // Closes Dialog
+            }, // Closes StatefulBuilder builder
+          ); // Closes StatefulBuilder
+        }, // Closes showDialog builder
+      );
+    } finally {
+      countdownTimer?.cancel();
+    }
   }
 }
