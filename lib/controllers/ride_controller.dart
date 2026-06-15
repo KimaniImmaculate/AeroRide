@@ -105,12 +105,17 @@ class RideController extends ChangeNotifier {
       currentRideStatus = "CONTACTING DRIVER...";
       notifyListeners();
 
+      // Ensure tiers are loaded if the background task hasn't finished
+      if (vehicleTiers.isEmpty) {
+        await loadRideTypes();
+      }
+
       // 👤 LAZY-AUTH FALLBACK: If the user hasn't registered a real name yet, enforce a guest placeholder
       final freshUser = FirebaseAuth.instance.currentUser;
       final resolvedRiderName = (freshUser?.displayName?.isNotEmpty ?? false)
           ? freshUser!.displayName!
           : (riderName.trim().isEmpty ? "Guest Rider" : riderName);
-      
+
       // Use the selected tier to calculate the precise fare
       final distance = _distanceMeters(pickup.latitude, pickup.longitude,
               destination.latitude, destination.longitude) /
@@ -165,7 +170,8 @@ class RideController extends ChangeNotifier {
         status: 'searching',
         estimatedCost: rideFare, // Use the calculated fare
         candidateDrivers: resolvedCandidateDrivers,
-        rideTier: selectedTier?.id.toLowerCase(), // Enforce: tulia, nuru, pamoja, waziri
+        rideTier: selectedTier?.id
+            .toLowerCase(), // Enforce: tulia, nuru, pamoja, waziri
       );
 
       stage = 'creating ride request';
@@ -994,6 +1000,15 @@ class RideController extends ChangeNotifier {
 
   Future<void> cancelActiveRide() async {
     if (activeRideId != null) {
+      final user = FirebaseAuth.instance.currentUser;
+
+      // 🔐 AUTH GUARD: Ensure user is fully authenticated (not a guest)
+      // when performing critical ride modifications.
+      if (user == null || user.isAnonymous) {
+        debugPrint('RideController: Aborting cancel - Real account required.');
+        throw FirebaseAuthException(code: 'not-authenticated');
+      }
+
       try {
         await FirebaseFirestore.instance
             .collection('rides')
@@ -1006,6 +1021,22 @@ class RideController extends ChangeNotifier {
       }
     }
     cancelActiveTracking();
+  }
+
+  /// Helper for UI buttons to verify if the current user has driver-level permissions
+  /// and is fully authenticated (not a guest).
+  bool verifyDriverAccess() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || user.isAnonymous) {
+      debugPrint(
+          'RideController: Driver access denied - Guest session detected.');
+      // Throwing here triggers the try/catch block in your UI to show the Login Modal
+      throw FirebaseAuthException(
+        code: 'auth-required',
+        message: 'Please sign in to access Driver Mode.',
+      );
+    }
+    return true;
   }
 
   void cancelActiveTracking() {

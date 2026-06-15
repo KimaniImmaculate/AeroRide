@@ -3,17 +3,20 @@
     "platforms": {
       "android": {
         "default": {
-          "projectId": "aeroride-1",
-          "appId": "1:111977761046:android:db4e10e518fa6a3520a837",
+          "projectId": "aero-db-53d7a",
+          "appId": "1:168014304010:android:2e0f03d8bdec94a59720f3",
           "fileOutput": "android/app/google-services.json"
         }
       },
       "dart": {
         "lib/firebase_options.dart": {
-          "projectId": "aeroride-1",
+          "projectId": "aero-db-53d7a",
           "configurations": {
-            "android": "1:111977761046:android:db4e10e518fa6a3520a837",
-            "web": "1:111977761046:web:430fd1ffbd27f87a20a837"
+            "android": "1:168014304010:android:2e0f03d8bdec94a59720f3",
+            "ios": "1:168014304010:ios:9c6241eb6b19e15c9720f3",
+            "macos": "1:168014304010:ios:9c6241eb6b19e15c9720f3",
+            "web": "1:168014304010:web:73d78b6e92bfff7b9720f3",
+            "windows": "1:168014304010:web:df8270639f2012739720f3"
           }
         }
       }

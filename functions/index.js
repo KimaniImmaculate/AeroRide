@@ -19,12 +19,8 @@ const MPESA_BASE_URL = 'https://sandbox.safaricom.co.ke';
 const MPESA_FALLBACK_CONSUMER_KEY = 'KAT0fSSkv24HA2v1vJQHlNbLN3uY15zspVz0ZAq68HA5B50X';
 const MPESA_FALLBACK_CONSUMER_SECRET = 'TvopOs1TsY7osJm9nfDxSAB4EByhdDa5xDH52oFMxNuxaAA3S1dJkA74NQxaoq86';
 
-// ==========================================
-// FIXING THE VARIABLE TYPO HERE 🛠️
-// ==========================================
 function getSandboxMpesaConfig() {
   return {
-    // ✅ FIXED: Changed MP_BASE_URL to MPESA_BASE_URL
     baseUrl: process.env.MPESA_BASE_URL || MPESA_BASE_URL, 
     consumerKey: process.env.MPESA_CONSUMER_KEY || MPESA_FALLBACK_CONSUMER_KEY,
     consumerSecret: process.env.MPESA_CONSUMER_SECRET || MPESA_FALLBACK_CONSUMER_SECRET,
@@ -68,12 +64,12 @@ async function fetchJson(url, options) {
 }
 
 // ==========================================
-// 1. INITIATE STK PUSH FUNCTION (onRequest version for direct Flutter calls)
+// 1. INITIATE STK PUSH FUNCTION
 // ==========================================
 exports.initiateStkPush = onRequest({ region: 'us-central1', cors: true }, async (req, res) => {
   try {
-    // 1. Accept data from body (POST) or query params (GET/Testing)
     const rawPhoneNumber = req.body?.data?.phoneNumber || req.query?.phoneNumber || '';
+    const rideId = req.body?.data?.rideId || req.query?.rideId || null;
     const phoneNumber = normalizePhoneNumber(rawPhoneNumber);
     const mpesaConfig = getSandboxMpesaConfig();
 
@@ -85,7 +81,6 @@ exports.initiateStkPush = onRequest({ region: 'us-central1', cors: true }, async
     const consumerKey = mpesaConfig.consumerKey || MPESA_FALLBACK_CONSUMER_KEY;
     const consumerSecret = mpesaConfig.consumerSecret || MPESA_FALLBACK_CONSUMER_SECRET;
 
-    // 2. Fetch Safaricom OAuth Token
     const tokenResponse = await fetchJson(
       `${mpesaConfig.baseUrl}/oauth/v1/generate?grant_type=client_credentials`,
       {
@@ -103,7 +98,6 @@ exports.initiateStkPush = onRequest({ region: 'us-central1', cors: true }, async
       return;
     }
 
-    // 3. Build the STK Payload
     const timestamp = getTimestamp();
     const shortcode = mpesaConfig.shortcode || MPESA_SHORTCODE;
     const passkey = mpesaConfig.passkey || MPESA_PASSKEY;
@@ -114,7 +108,7 @@ exports.initiateStkPush = onRequest({ region: 'us-central1', cors: true }, async
       Password: password,
       Timestamp: timestamp,
       TransactionType: 'CustomerPayBillOnline',
-      Amount: 1, // Sandbox force-amount override
+      Amount: 1, 
       PartyA: phoneNumber,
       PartyB: shortcode,
       PhoneNumber: phoneNumber,
@@ -123,7 +117,6 @@ exports.initiateStkPush = onRequest({ region: 'us-central1', cors: true }, async
       TransactionDesc: 'AeroRide ride payment',
     };
 
-    // 4. Send Request to Safaricom Daraja API
     const stkResponse = await fetchJson(`${mpesaConfig.baseUrl}/mpesa/stkpush/v1/processrequest`, {
       method: 'POST',
       headers: {
@@ -141,6 +134,7 @@ exports.initiateStkPush = onRequest({ region: 'us-central1', cors: true }, async
         await db.collection('payments').doc(checkoutRequestID).set({
           status: 'PENDING',
           phoneNumber: phoneNumber,
+          rideId: rideId,
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
         });
       }
@@ -156,7 +150,6 @@ exports.initiateStkPush = onRequest({ region: 'us-central1', cors: true }, async
       return;
     }
 
-    // 5. Respond to Flutter with exact wrapper layout
     res.status(200).json({
       data: {
         success: true,
@@ -170,7 +163,6 @@ exports.initiateStkPush = onRequest({ region: 'us-central1', cors: true }, async
 
   } catch (error) {
     console.error("Internal STK Push Error:", error);
-    // ✅ Formatted specifically to stop the generic 'internal' wrapper fallback in Flutter
     res.status(500).json({
       error: {
         status: "INTERNAL",
@@ -180,7 +172,6 @@ exports.initiateStkPush = onRequest({ region: 'us-central1', cors: true }, async
     });
   }
 });
-
 
 // ==========================================
 // 2. MPESA CALLBACK FUNCTION
@@ -206,29 +197,45 @@ exports.mpesaCallback = onRequest({ region: 'us-central1', cors: true }, async (
     const body = payload.Body?.stkCallback;
     if (body) {
       const checkoutRequestID = body.CheckoutRequestID;
-      const status = body.ResultCode === 0 ? 'SUCCESSFUL' : 'FAILED';
+      const isSuccessful = body.ResultCode === 0;
+      const status = isSuccessful ? 'SUCCESSFUL' : 'FAILED';
       
-      const updateData = {
-        status: status,
-        resultCode: body.ResultCode,
-        resultDesc: body.ResultDesc,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      };
+      await db.runTransaction(async (transaction) => {
+        const paymentDocRef = db.collection('payments').doc(checkoutRequestID);
+        const paymentSnap = await transaction.get(paymentDocRef);
+        
+        if (!paymentSnap.exists) return;
+        const paymentData = paymentSnap.data();
 
-      // Extract M-Pesa Receipt Number from metadata if successful
-      if (body.ResultCode === 0 && body.CallbackMetadata) {
-        const items = body.CallbackMetadata.Item || [];
-        const receiptItem = items.find(i => i.Name === 'MpesaReceiptNumber');
-        if (receiptItem) {
-          updateData.receiptNumber = receiptItem.Value;
+        const updateData = {
+          status: status,
+          resultCode: body.ResultCode,
+          resultDesc: body.ResultDesc,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+
+        if (isSuccessful && body.CallbackMetadata) {
+          const items = body.CallbackMetadata.Item || [];
+          const receiptItem = items.find(i => i.Name === 'MpesaReceiptNumber');
+          if (receiptItem) {
+            updateData.receiptNumber = receiptItem.Value;
+          }
+          
+          if (paymentData.rideId) {
+            const rideRef = db.collection('rides').doc(paymentData.rideId);
+            transaction.update(rideRef, {
+              paymentStatus: 'paid',
+              status: 'completed', 
+              paidAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+          }
         }
-      }
 
-      await db.collection('payments').doc(checkoutRequestID).update(updateData);
+        transaction.update(paymentDocRef, updateData);
+      });
     }
 
     res.status(200).send({ ResultCode: 0, ResultDesc: "Accepted successfully" });
-
   } catch (callbackError) {
     console.error("Callback Processing Error:", callbackError);
     res.status(500).send({ ResultCode: 1, ResultDesc: "Internal Error" });
@@ -278,7 +285,7 @@ exports.directionsProxy = onRequest({ region: 'us-central1', cors: true }, async
 });
 
 // ==========================================
-// 4. RIDE STATE MACHINE ENFORCER (v1 Background Firestore Trigger)
+// 4. FIXED RIDE STATE MACHINE ENFORCER (Anti-Recursion Shield Enabled 🛡️)
 // ==========================================
 const ALLOWED = {
   searching: ['accepted', 'cancelled'],
@@ -293,21 +300,34 @@ exports.enforceRideStateMachine = functions.firestore
   .onUpdate(async (change, context) => {
     const before = change.before.data() || {};
     const after = change.after.data() || {};
-    const rideId = context.params.rideId;
 
+    // 1. STRICT GUARD: Exit immediately if status hasn't changed to block standard iterations
+    if (before.status === after.status) {
+      return null;
+    }
+
+    // 2. RECURSION SHIELD: Exit immediately if an error tracking update is already in play.
+    // This stops rollback loops from triggering recursive invocations.
+    if (after.stateMachineError && !before.stateMachineError) {
+      return null;
+    }
+
+    const rideId = context.params.rideId;
     const prev = before.status || 'searching';
     const next = after.status || 'searching';
 
-    if (prev === next) return null;
-
     const allowedNext = ALLOWED[prev] || [];
+    
     if (!allowedNext.includes(next)) {
+      console.warn(`CRITICAL STATE MACHINE VIOLATION: Preventing loop for ride ${rideId} (${prev} -> ${next})`);
+      
+      // Forceful atomic termination block. We write the fault directly without ping-pong adjustments.
       await db.collection('rides').doc(rideId).update({
-        status: prev,
-        stateMachineError: `Invalid transition ${prev} -> ${next}`,
+        status: prev, // Set back to previous stable layout state
+        stateMachineError: `Blocked invalid transition attempt from ${prev} to ${next}`,
         stateMachineErrorAt: admin.firestore.FieldValue.serverTimestamp(),
       });
-      console.warn(`Reverted invalid transition for ride ${rideId}: ${prev} -> ${next}`);
     }
+    
     return null;
   });

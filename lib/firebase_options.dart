@@ -23,20 +23,11 @@ class DefaultFirebaseOptions {
       case TargetPlatform.android:
         return android;
       case TargetPlatform.iOS:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for ios - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
+        return ios;
       case TargetPlatform.macOS:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for macos - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
+        return macos;
       case TargetPlatform.windows:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for windows - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
+        return windows;
       case TargetPlatform.linux:
         throw UnsupportedError(
           'DefaultFirebaseOptions have not been configured for linux - '
@@ -50,20 +41,47 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyBjOh2468oU-jC12XhoS7XKVsIripmEI74',
-    appId: '1:111977761046:web:430fd1ffbd27f87a20a837',
-    messagingSenderId: '111977761046',
-    projectId: 'aeroride-1',
-    authDomain: 'aeroride-1.firebaseapp.com',
-    storageBucket: 'aeroride-1.firebasestorage.app',
+    apiKey: 'AIzaSyBGCrwgSzns4FEABJRj5FrVcwSCr-19M2M',
+    appId: '1:168014304010:web:73d78b6e92bfff7b9720f3',
+    messagingSenderId: '168014304010',
+    projectId: 'aero-db-53d7a',
+    authDomain: 'aero-db-53d7a.firebaseapp.com',
+    storageBucket: 'aero-db-53d7a.firebasestorage.app',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyBalnsra3xJhgaJck3amzvkaKeKtrjaXCs',
-    appId: '1:111977761046:android:db4e10e518fa6a3520a837',
-    messagingSenderId: '111977761046',
-    projectId: 'aeroride-1',
-    storageBucket: 'aeroride-1.firebasestorage.app',
+    apiKey: 'AIzaSyC_QLDUp7vwn6-3kP1Ilz_Qnf9fKngb-7k',
+    appId: '1:168014304010:android:2e0f03d8bdec94a59720f3',
+    messagingSenderId: '168014304010',
+    projectId: 'aero-db-53d7a',
+    storageBucket: 'aero-db-53d7a.firebasestorage.app',
+  );
+
+  static const FirebaseOptions macos = FirebaseOptions(
+    apiKey: 'AIzaSyCVomo_KSk6_xRUzcy-TxUHwWbq5sx8mEE',
+    appId: '1:168014304010:ios:9c6241eb6b19e15c9720f3',
+    messagingSenderId: '168014304010',
+    projectId: 'aero-db-53d7a',
+    storageBucket: 'aero-db-53d7a.firebasestorage.app',
+    iosBundleId: 'com.example.aeroride',
+  );
+
+  static const FirebaseOptions ios = FirebaseOptions(
+    apiKey: 'AIzaSyCVomo_KSk6_xRUzcy-TxUHwWbq5sx8mEE',
+    appId: '1:168014304010:ios:9c6241eb6b19e15c9720f3',
+    messagingSenderId: '168014304010',
+    projectId: 'aero-db-53d7a',
+    storageBucket: 'aero-db-53d7a.firebasestorage.app',
+    iosBundleId: 'com.example.aeroride',
+  );
+
+  static const FirebaseOptions windows = FirebaseOptions(
+    apiKey: 'AIzaSyBGCrwgSzns4FEABJRj5FrVcwSCr-19M2M',
+    appId: '1:168014304010:web:df8270639f2012739720f3',
+    messagingSenderId: '168014304010',
+    projectId: 'aero-db-53d7a',
+    authDomain: 'aero-db-53d7a.firebaseapp.com',
+    storageBucket: 'aero-db-53d7a.firebasestorage.app',
   );
 
 }

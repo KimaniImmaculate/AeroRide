@@ -56,6 +56,19 @@ class SimulationService {
     int count = 5,
     double spreadMeters = 800,
   }) async {
+    final user = FirebaseAuth.instance.currentUser;
+
+    // 🔐 STRICT AUTH GUARD: Drivers cannot use simulation or journey features
+    // while browsing as an anonymous guest.
+    if (user == null || user.isAnonymous) {
+      debugPrint(
+          'SimulationService: Aborting seedMockDrivers - Real account required.');
+      // Throwing this allows the UI to catch it and call authService.showLogin()
+      throw FirebaseAuthException(
+          code: 'auth-required',
+          message: 'Please sign in to start your journey.');
+    }
+
     debugPrint('SimulationService: seeding $count drivers around $center');
     final rnd = Random();
     final created = <String>[];

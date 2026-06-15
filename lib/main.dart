@@ -19,6 +19,7 @@ import 'package:aeroride/widgets/main_layout_wrapper.dart';
 import 'package:aeroride/widgets/aero_welcome_view.dart';
 import 'package:aeroride/screens/views/driver_dashboard_view.dart'
     as driver_views;
+import 'package:aeroride/screens/views/driver_cockpit_view.dart';
 import 'package:aeroride/screens/views/rider_dashboard_view.dart'
     as rider_views;
 import 'package:aeroride/services/auth_service.dart';
@@ -55,8 +56,12 @@ class AeroRideApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (_) => RideController(),
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(
+            create: (_) => RideController()..loadRideTypes()),
+        Provider<AuthService>(create: (_) => AuthService()),
+      ],
       child: MaterialApp(
         title: 'AeroRide',
         debugShowCheckedModeBanner: false,
@@ -96,9 +101,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
           );
         }
 
-        // Always start with the welcome view.
-        // The sign-in is handled when they click "LET'S GLIDE".
-        return const AeroRideGatewayPortal(); // This is already correct
+        return const AeroRideGatewayPortal();
       },
     );
   }

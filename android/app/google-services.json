@@ -1,36 +1,26 @@
 {
   "project_info": {
-    "project_number": "111977761046",
-    "project_id": "aeroride-1",
-    "storage_bucket": "aeroride-1.firebasestorage.app"
+    "project_number": "168014304010",
+    "project_id": "aero-db-53d7a",
+    "storage_bucket": "aero-db-53d7a.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:111977761046:android:db4e10e518fa6a3520a837",
+        "mobilesdk_app_id": "1:168014304010:android:2e0f03d8bdec94a59720f3",
         "android_client_info": {
           "package_name": "com.example.aeroride"
         }
       },
-      "oauth_client": [
-        {
-          "client_id": "111977761046-4pgp8a5jbtcbjrofriss3l0j9anccnv1.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
+      "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyBalnsra3xJhgaJck3amzvkaKeKtrjaXCs"
+          "current_key": "AIzaSyC_QLDUp7vwn6-3kP1Ilz_Qnf9fKngb-7k"
         }
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "111977761046-4pgp8a5jbtcbjrofriss3l0j9anccnv1.apps.googleusercontent.com",
-              "client_type": 3
-            }
-          ]
+          "other_platform_oauth_client": []
         }
       }
     }

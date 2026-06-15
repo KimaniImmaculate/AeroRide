@@ -66,6 +66,8 @@ class DriverDashboardView extends StatefulWidget {
 class _DriverDashboardViewState extends State<DriverDashboardView> {
   static const double kSegmentThresholdKm = 0.0001;
   static const Color signatureTurquoise = Color(0xFF16A085);
+  static const Color midnightSlate = Color(0xFF1A1C23);
+  static const Color charcoalBg = Color(0xFF0F1013);
 
   GoogleMapController? _mapController;
   DriverTerminalState _currentState = DriverTerminalState.offline;
@@ -97,6 +99,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   LatLng _driverCurrentLocation = const LatLng(-0.2831, 36.0664);
 
   final LatLng _mockDriverCurrentLocation = const LatLng(-0.28496, 36.06795);
+  final TextEditingController _pinController = TextEditingController();
   final LatLng _mockRiderPickupLocation = const LatLng(-0.28989, 36.05451);
   final LatLng _mockRiderDestinationLocation = const LatLng(-0.26562, 36.04853);
 
@@ -124,6 +127,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
   @override
   void dispose() {
     _driverSimulationTimer?.cancel();
+    _pinController.dispose();
     _simulationTimer?.cancel();
     _mapController = null;
     super.dispose();
@@ -215,9 +219,9 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                         (widget.user?.displayName?.isNotEmpty ?? false)
                             ? widget.user!.displayName![0].toUpperCase()
                             : 'D', // Fallback to 'D' if displayName is null or empty
-                        style: const TextStyle(
+                        style: GoogleFonts.urbanist(
                           color: Colors.white,
-                          fontWeight: FontWeight.w800,
+                          fontWeight: FontWeight.w900,
                         ),
                       ),
                     ),
@@ -229,9 +233,10 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                           Text(
                             widget.user?.displayName ??
                                 'Driver', // Fallback for displayName
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w800,
+                            style: GoogleFonts.urbanist(
+                              fontWeight: FontWeight.w900,
                               fontSize: 16,
+                              color: Colors.white,
                             ),
                           ),
                           Text(
@@ -301,9 +306,9 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                     color: Colors.redAccent,
                     size: 18,
                   ),
-                  label: const Text(
+                  label: Text(
                     'Go Offline & Sign Out',
-                    style: TextStyle(
+                    style: GoogleFonts.urbanist(
                       color: Colors.redAccent,
                       fontWeight: FontWeight.bold,
                     ),
@@ -368,8 +373,9 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.92),
-        borderRadius: BorderRadius.circular(14),
+        color: midnightSlate,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.08), width: 1.5),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -378,20 +384,21 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
+              Text(
                 'DRIVER EARNINGS',
-                style: TextStyle(
-                  color: Colors.white54,
-                  fontSize: 9,
-                  fontWeight: FontWeight.bold,
+                style: GoogleFonts.urbanist(
+                  color: Colors.grey[400],
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.1,
                 ),
               ),
-              const SizedBox(height: 2),
+              const SizedBox(height: 4),
               Text(
                 'KSh ${_driverLiveEarningsKsh.toStringAsFixed(0)}',
-                style: const TextStyle(
-                  color: Colors.lightGreenAccent,
-                  fontSize: 20,
+                style: GoogleFonts.urbanist(
+                  color: signatureTurquoise,
+                  fontSize: 36,
                   fontWeight: FontWeight.w900,
                 ),
               ),
@@ -402,21 +409,21 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
             crossAxisAlignment: CrossAxisAlignment.end,
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
+              Text(
                 'TOTAL FARE',
-                style: TextStyle(
-                  color: Colors.white54,
-                  fontSize: 9,
-                  fontWeight: FontWeight.bold,
+                style: GoogleFonts.urbanist(
+                  color: Colors.grey[400],
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
-              const SizedBox(height: 2),
+              const SizedBox(height: 4),
               Text(
                 'KSh ${_passengerLiveFareKsh.toStringAsFixed(0)}',
-                style: const TextStyle(
+                style: GoogleFonts.urbanist(
                   color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
                 ),
               ),
             ],
@@ -430,147 +437,174 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: const Color(0xFF1C1C1E).withOpacity(0.9),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
-        border: Border.all(color: Colors.white10),
+        color: midnightSlate,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        border: Border.all(color: Colors.white.withOpacity(0.08), width: 1.5),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (_currentState == DriverTerminalState.offline) ...[
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 30),
-                child: Column(
-                  children: [
-                    const Icon(Icons.power_settings_new_rounded,
-                        size: 60, color: signatureTurquoise),
-                    const SizedBox(height: 12),
-                    Text("COCKPIT OFFLINE",
-                        style: GoogleFonts.urbanist(
-                            fontWeight: FontWeight.w900,
-                            fontSize: 20,
-                            color: Colors.white)),
-                    const SizedBox(height: 6),
-                    Text(
-                        "Toggle availability to begin scanning the AeroRide grid.",
-                        textAlign: TextAlign.center,
-                        style: GoogleFonts.urbanist(
-                            fontSize: 13, color: Colors.white54)),
-                    const SizedBox(height: 24),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 56,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: signatureTurquoise,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16)),
-                        ),
-                        onPressed: () {
-                          setState(() {
-                            _isOnline = true;
-                            _currentState = DriverTerminalState.searching;
-                          });
-                          _autoTriggerIncomingRideSearch();
-                        },
-                        child: Text("GO ONLINE",
-                            style: GoogleFonts.urbanist(
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white)),
-                      ),
-                    )
-                  ],
+            Text("PARTNER COCKPIT",
+                style: GoogleFonts.urbanist(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 12,
+                    color: Colors.grey[400],
+                    letterSpacing: 1.5)),
+            const SizedBox(height: 20),
+            // Clean Scorecard Grid
+            GridView.count(
+              shrinkWrap: true,
+              crossAxisCount: 2,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+              childAspectRatio: 1.4,
+              physics: const NeverScrollableScrollPhysics(),
+              children: [
+                _buildScorecardItem(
+                    "Today's Earnings", "KSh 1,450", signatureTurquoise),
+                _buildScorecardItem("Total Trips", "12 Jobs", Colors.white),
+                _buildScorecardItem(
+                    "Driver Rating", "4.98 ★", Colors.amberAccent),
+                _buildScorecardItem("Reliability", "98%", Colors.blueAccent),
+              ],
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              height: 56,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: signatureTurquoise,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)),
+                  elevation: 0,
                 ),
+                onPressed: () {
+                  setState(() {
+                    _isOnline = true;
+                    _currentState = DriverTerminalState.searching;
+                  });
+                  _autoTriggerIncomingRideSearch();
+                },
+                child: Text("ENTER LIVE GRID",
+                    style: GoogleFonts.urbanist(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 16,
+                        letterSpacing: 1,
+                        color: Colors.white)),
               ),
             ),
+            const SizedBox(height: 10),
           ],
           if (_currentState == DriverTerminalState.searching) ...[
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 const SizedBox(
-                    width: 16,
-                    height: 16,
+                    width: 18,
+                    height: 18,
                     child: CircularProgressIndicator(
-                        strokeWidth: 2, color: signatureTurquoise)),
+                        strokeWidth: 3, color: signatureTurquoise)),
                 const SizedBox(width: 12),
                 Expanded(
-                    child: Text("Scanning Grid Telemetry...",
+                    child: Text("SCANNING GRID TELEMETRY...",
                         style: GoogleFonts.urbanist(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 12,
                             color: Colors.white70))),
               ],
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 12),
           ],
           if (_currentState == DriverTerminalState.searching &&
               _availableRequests.isNotEmpty) ...[
             Text("AVAILABLE DISPATCHES (${_availableRequests.length})",
                 style: GoogleFonts.urbanist(
                     fontWeight: FontWeight.w900,
-                    fontSize: 11,
-                    color: signatureTurquoise,
-                    letterSpacing: 1)),
-            const SizedBox(height: 10),
+                    fontSize: 10,
+                    color: Colors.amberAccent,
+                    letterSpacing: 1.2)),
+            const SizedBox(height: 14),
             ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 220),
+              constraints: const BoxConstraints(maxHeight: 260),
               child: SingleChildScrollView(
                 physics: const BouncingScrollPhysics(),
                 child: Column(
                   children: _availableRequests.map((request) {
                     return Container(
                       margin: const EdgeInsets.only(bottom: 10),
-                      padding: const EdgeInsets.all(12),
+                      padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.05),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.white10)),
+                          color: Colors.white.withOpacity(0.03),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                              color: Colors.white.withOpacity(0.05))),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text(request.riderName ?? "Rider",
+                              Text(
+                                  request.riderName?.toUpperCase() ??
+                                      "NEW RIDER",
                                   style: GoogleFonts.urbanist(
-                                      fontWeight: FontWeight.bold,
+                                      fontWeight: FontWeight.w900,
                                       fontSize: 14,
                                       color: Colors.white)),
                               Text(
-                                  "Est: KSh ${request.estimatedCost.toStringAsFixed(0)}",
+                                  "KSh ${request.estimatedCost.toStringAsFixed(0)}",
                                   style: GoogleFonts.urbanist(
                                       fontWeight: FontWeight.w900,
                                       color: signatureTurquoise,
-                                      fontSize: 13)),
+                                      fontSize: 15)),
                             ],
                           ),
-                          const SizedBox(height: 4),
-                          Text("From: ${request.pickupAddress}",
-                              style: GoogleFonts.urbanist(
-                                  fontSize: 11, color: Colors.white54),
-                              overflow: TextOverflow.ellipsis),
-                          Text("To: ${request.destinationAddress}",
-                              style: GoogleFonts.urbanist(
-                                  fontSize: 11, color: Colors.white54),
-                              overflow: TextOverflow.ellipsis),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              const Icon(Icons.radio_button_checked,
+                                  size: 14, color: Colors.blueAccent),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(request.pickupAddress,
+                                    style: GoogleFonts.urbanist(
+                                        fontSize: 12, color: Colors.grey[300]),
+                                    overflow: TextOverflow.ellipsis),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              const Icon(Icons.location_on,
+                                  size: 14, color: Colors.redAccent),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(request.destinationAddress,
+                                    style: GoogleFonts.urbanist(
+                                        fontSize: 12, color: Colors.grey[300]),
+                                    overflow: TextOverflow.ellipsis),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
                           ElevatedButton(
                             style: ElevatedButton.styleFrom(
                               backgroundColor: signatureTurquoise,
                               foregroundColor: Colors.white,
-                              minimumSize: const Size.fromHeight(36),
+                              minimumSize: const Size.fromHeight(40),
                               shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8)),
+                                  borderRadius: BorderRadius.circular(12)),
                             ),
                             onPressed: () {
                               _acceptRideRequest(request.toMap());
                             },
-                            child: const Text("ACCEPT JOB",
-                                style: TextStyle(
-                                    fontSize: 12, fontWeight: FontWeight.bold)),
+                            child: Text("ACCEPT TRAJECTORY",
+                                style: GoogleFonts.urbanist(
+                                    fontSize: 13, fontWeight: FontWeight.w900)),
                           )
                         ],
                       ),
@@ -578,6 +612,47 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                   }).toList(),
                 ),
               ),
+            ),
+          ],
+          if (_currentState == DriverTerminalState.arrived) ...[
+            Text("PASSENGER PIN GATE",
+                style: GoogleFonts.urbanist(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 10,
+                    color: Colors.amberAccent,
+                    letterSpacing: 1.5)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _pinController,
+              keyboardType: TextInputType.number,
+              maxLength: 4,
+              style: GoogleFonts.urbanist(
+                fontSize: 24,
+                fontWeight: FontWeight.w900,
+                color: charcoalBg,
+                letterSpacing: 20,
+              ),
+              textAlign: TextAlign.center,
+              decoration: InputDecoration(
+                hintText: "0000",
+                counterText: "",
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Colors.white, width: 2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: () => _startPassengerTransitTrip(),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: signatureTurquoise,
+                  minimumSize: const Size.fromHeight(48)),
+              child: Text("VALIDATE & START TRIP",
+                  style: GoogleFonts.urbanist(
+                      fontWeight: FontWeight.w900, color: Colors.white)),
             ),
           ],
           if (_currentState == DriverTerminalState.inTransit &&
@@ -610,43 +685,42 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
           ],
           if (_currentState == DriverTerminalState.completing &&
               !_isProcessingPaymentPush) ...[
-            Text("DESTINATION ARRIVED",
+            Text("DESTINATION REACHED",
                 style: GoogleFonts.urbanist(
-                    fontWeight: FontWeight.bold,
+                    fontWeight: FontWeight.w900,
                     fontSize: 11,
-                    color: Colors.redAccent)),
-            const SizedBox(height: 4),
+                    color: Colors.redAccent,
+                    letterSpacing: 1.2)),
+            const SizedBox(height: 8),
             Text(
-                "Please request final trip remittance statement from ${_activeRequest?.riderName ?? 'Passenger'}.",
-                style:
-                    GoogleFonts.urbanist(fontSize: 12, color: Colors.white54)),
-            const SizedBox(height: 12),
+                "Verify final fare on the passenger terminal and request remittance.",
+                style: GoogleFonts.urbanist(
+                    fontSize: 13, color: Colors.grey[400])),
+            const SizedBox(height: 20),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                  backgroundColor: signatureTurquoise,
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size.fromHeight(45)),
+                  backgroundColor: Colors.white,
+                  foregroundColor: charcoalBg,
+                  minimumSize: const Size.fromHeight(50),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12))),
               onPressed: () => _triggerSimulatedRiderPayment(),
               child: Text(
-                  "REQUEST PAYMENT (KSh ${_passengerLiveFareKsh.toStringAsFixed(0)})",
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
+                  "COMPLETE & SETTLE (KSh ${_passengerLiveFareKsh.toStringAsFixed(0)})",
+                  style: GoogleFonts.urbanist(
+                      fontWeight: FontWeight.w900, letterSpacing: 0.5)),
             ),
           ],
           if (_isProcessingPaymentPush) ...[
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: signatureTurquoise)),
                 const SizedBox(width: 14),
                 Text("Awaiting Rider Wallet transaction auth...",
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold,
+                    style: GoogleFonts.urbanist(
+                        fontWeight: FontWeight.w700,
                         fontSize: 13,
-                        color: Colors.black87)),
+                        color: Colors.white70)),
               ],
             ),
             const SizedBox(height: 4),
@@ -654,57 +728,66 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
           if (_paymentReceived) ...[
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(14),
+              padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                  color: signatureTurquoise.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
+                  color: Colors.white.withOpacity(0.02),
+                  borderRadius: BorderRadius.circular(20),
                   border:
-                      Border.all(color: signatureTurquoise.withOpacity(0.3))),
+                      Border.all(color: signatureTurquoise.withOpacity(0.2))),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.check_circle_outline,
-                          color: signatureTurquoise, size: 20),
-                      const SizedBox(width: 8),
-                      Text("IN-APP MESSAGE LOG",
-                          style: GoogleFonts.urbanist(
-                              fontWeight: FontWeight.w900,
-                              fontSize: 11,
-                              color: signatureTurquoise)),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
+                  const Icon(Icons.verified,
+                      color: signatureTurquoise, size: 48),
+                  const SizedBox(height: 14),
                   Text(
-                    "Success! Settlement received via AeroRide Pay. Account ledger updated.",
+                    "SETTLEMENT SUCCESSFUL",
                     style: GoogleFonts.urbanist(
-                        fontSize: 12,
-                        height: 1.4,
-                        color: Colors.black87,
-                        fontWeight: FontWeight.w500),
+                        fontWeight: FontWeight.w900,
+                        fontSize: 16,
+                        color: signatureTurquoise),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 20),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                   backgroundColor: signatureTurquoise,
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size.fromHeight(42)),
+                  minimumSize: const Size.fromHeight(50)),
               onPressed: () {
-                setState(() {
-                  _currentState = DriverTerminalState.searching;
-                  _paymentReceived = false;
-                  _isOnline = true;
-                });
-                _autoTriggerIncomingRideSearch();
+                _resetDriverDashboard();
               },
-              child: const Text("GO BACK ONLINE / REFRESH JOB MARKET",
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+              child: Text("RESUME LIVE OPERATIONS",
+                  style: GoogleFonts.urbanist(
+                      fontWeight: FontWeight.w900, color: Colors.white)),
             )
           ]
+        ],
+      ),
+    );
+  }
+
+  Widget _buildScorecardItem(String label, String value, Color accent) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.03),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(label,
+              style: GoogleFonts.urbanist(
+                  fontSize: 11,
+                  color: Colors.grey[400],
+                  fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          Text(value,
+              style: GoogleFonts.urbanist(
+                  fontSize: 20, fontWeight: FontWeight.w900, color: accent)),
         ],
       ),
     );
@@ -714,17 +797,17 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
     return Container(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
       decoration: const BoxDecoration(
-        color: Color(0xFF111113),
+        color: charcoalBg,
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text("GRID TELEMETRY OVERRIDES",
-              style: TextStyle(
+          Text("GRID TELEMETRY OVERRIDES",
+              style: GoogleFonts.urbanist(
                   color: Colors.white38,
                   fontSize: 10,
-                  fontWeight: FontWeight.bold,
+                  fontWeight: FontWeight.w900,
                   letterSpacing: 1.5)),
           const SizedBox(height: 16),
           SingleChildScrollView(
@@ -749,10 +832,10 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       backgroundColor: Colors.white.withOpacity(0.05),
       side: const BorderSide(color: Colors.white10),
       label: Text(label,
-          style: const TextStyle(
+          style: GoogleFonts.urbanist(
               color: Colors.white70,
               fontSize: 10,
-              fontWeight: FontWeight.bold)),
+              fontWeight: FontWeight.w800)),
       onPressed: () => _reportHazard(label),
     );
   }
@@ -781,68 +864,112 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       leading: Icon(icon, color: Colors.black87, size: 22),
       title: Text(
         title,
-        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+        style: GoogleFonts.urbanist(fontWeight: FontWeight.w800, fontSize: 14),
       ),
       subtitle: Text(
         subtitle,
-        style: const TextStyle(fontSize: 12, color: Colors.grey),
+        style: GoogleFonts.urbanist(fontSize: 12, color: Colors.grey[600]),
       ),
       trailing:
           const Icon(Icons.arrow_forward_ios, size: 12, color: Colors.black26),
     );
   }
 
-  Widget _buildTopStatusBanner() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
-      child: Card(
-        color: Colors.black,
-        elevation: 1,
-        margin: EdgeInsets.zero,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
+  Widget _buildDriverProfileHeader() {
+    final String uid = widget.user?.uid ?? "";
+    return StreamBuilder<DocumentSnapshot>(
+      stream:
+          FirebaseFirestore.instance.collection('users').doc(uid).snapshots(),
+      builder: (context, snapshot) {
+        final data = snapshot.data?.data() as Map<String, dynamic>?;
+        final String name = data?['name'] ?? data?['fullName'] ?? "Driver";
+        final String email = data?['email'] ?? "partner@aeroride.com";
+
+        // Initials logic
+        final initials = name
+            .trim()
+            .split(' ')
+            .map((e) => e.isNotEmpty ? e[0] : '')
+            .take(2)
+            .join()
+            .toUpperCase();
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+          child: GestureDetector(
+            onTap: () => _showDriverQuickAccountSheet(context),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: midnightSlate,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white10),
+              ),
+              child: Row(
                 children: [
-                  Icon(
-                    Icons.circle,
-                    size: 11,
-                    color: _currentState == DriverTerminalState.offline
-                        ? Colors.redAccent
-                        : (_currentState == DriverTerminalState.searching
-                            ? Colors.greenAccent
-                            : Colors.orangeAccent),
+                  CircleAvatar(
+                    radius: 20,
+                    backgroundColor: signatureTurquoise,
+                    child: Text(initials,
+                        style: GoogleFonts.urbanist(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            fontSize: 14)),
                   ),
-                  const SizedBox(width: 10),
-                  Text(
-                    _currentState == DriverTerminalState.offline
-                        ? 'STATUS: OFFLINE'
-                        : (_currentState ==
-                                DriverTerminalState
-                                    .searching // Added null check for displayName
-                            ? 'STATUS: ONLINE'
-                            : 'JOB IN PROGRESS'),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.5,
-                      fontSize: 12,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(name,
+                            style: GoogleFonts.urbanist(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14)),
+                        Text(email,
+                            style: GoogleFonts.urbanist(
+                                color: Colors.white38, fontSize: 11)),
+                      ],
+                    ),
+                  ),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _currentState == DriverTerminalState.offline
+                          ? Colors.red.withOpacity(0.1)
+                          : Colors.green.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.circle,
+                            size: 8,
+                            color: _currentState == DriverTerminalState.offline
+                                ? Colors.red
+                                : Colors.green),
+                        const SizedBox(width: 6),
+                        Text(
+                          _currentState == DriverTerminalState.offline
+                              ? "OFFLINE"
+                              : "ONLINE",
+                          style: GoogleFonts.urbanist(
+                            color: _currentState == DriverTerminalState.offline
+                                ? Colors.red
+                                : Colors.green,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
               ),
-              IconButton(
-                icon: const Icon(Icons.badge, color: Colors.white, size: 24),
-                tooltip: 'Driver Account Desk',
-                onPressed: () => _showDriverQuickAccountSheet(context),
-              ),
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -1422,7 +1549,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
 
     // 2. RENDERING THE CHOSEN TAB CONTROLLER
     return Scaffold(
-      backgroundColor: const Color(0xFF111113),
+      backgroundColor: charcoalBg,
 
       // THE CORE BODY CONTAINER
       body: IndexedStack(
@@ -1437,17 +1564,6 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                 flex: 5,
                 child: Stack(
                   children: [
-                    Opacity(
-                      opacity: 0.08,
-                      child: Container(
-                        decoration: const BoxDecoration(
-                          image: DecorationImage(
-                            image: AssetImage('assets/nairobi_night_grid.png'),
-                            fit: BoxFit.cover,
-                          ),
-                        ),
-                      ),
-                    ),
                     GoogleMap(
                       initialCameraPosition: CameraPosition(
                           target: _mockDriverCurrentLocation, zoom: 13.5),
@@ -1505,11 +1621,11 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text("My Profile",
-                      style: TextStyle(
+                  Text("My Profile",
+                      style: GoogleFonts.urbanist(
                           fontSize: 26,
                           fontWeight: FontWeight.w900,
-                          color: Colors.black)),
+                          color: Colors.white)),
                   const SizedBox(height: 20),
 
                   // THE WORKSPACE TOGGLE SWITCH CARD
@@ -1533,9 +1649,9 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                             (widget.user?.displayName ?? "A")
                                 .substring(0, 1)
                                 .toUpperCase(),
-                            style: const TextStyle(
+                            style: GoogleFonts.urbanist(
                                 color: Colors.white,
-                                fontWeight: FontWeight.bold,
+                                fontWeight: FontWeight.w900,
                                 fontSize: 16),
                           ),
                         ),
@@ -1548,19 +1664,20 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                               Text(
                                   widget.user?.displayName ??
                                       "AeroRide Partner",
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 15)),
+                                  style: GoogleFonts.urbanist(
+                                      fontWeight: FontWeight.w900,
+                                      fontSize: 15,
+                                      color: Colors.white)),
                               const SizedBox(height: 2),
                               Text(
                                   _isOnline
                                       ? "Duty Status: Available"
                                       : "Duty Status: Offline",
-                                  style: TextStyle(
+                                  style: GoogleFonts.urbanist(
                                       fontSize: 11,
                                       color:
                                           _isOnline ? Colors.green : Colors.red,
-                                      fontWeight: FontWeight.bold)),
+                                      fontWeight: FontWeight.w900)),
                             ],
                           ),
                         ),
@@ -1588,11 +1705,11 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                   ),
 
                   const SizedBox(height: 24),
-                  const Text("VEHICLE & METRICS",
-                      style: TextStyle(
+                  Text("VEHICLE & METRICS",
+                      style: GoogleFonts.urbanist(
                           fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black45,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white38,
                           letterSpacing: 1)),
                   const SizedBox(height: 8),
 
@@ -1646,9 +1763,9 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                       elevation: 0,
                     ),
                     icon: const Icon(Icons.logout_rounded, size: 18),
-                    label: const Text("LOG OUT",
-                        style: TextStyle(
-                            fontSize: 13, fontWeight: FontWeight.bold)),
+                    label: Text("LOG OUT",
+                        style: GoogleFonts.urbanist(
+                            fontSize: 13, fontWeight: FontWeight.w900)),
                     onPressed: () async {
                       _driverSimulationTimer?.cancel();
 
@@ -1678,10 +1795,11 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
           });
         },
         selectedItemColor: Colors.black,
-        unselectedItemColor: Colors.grey,
+        unselectedItemColor: Colors.white30,
+        backgroundColor: midnightSlate,
         selectedLabelStyle:
-            const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
-        unselectedLabelStyle: const TextStyle(fontSize: 11),
+            GoogleFonts.urbanist(fontWeight: FontWeight.w900, fontSize: 11),
+        unselectedLabelStyle: GoogleFonts.urbanist(fontSize: 11),
         items: const [
           BottomNavigationBarItem(
               icon: Icon(Icons.map_rounded), label: "Map Dashboard"),
@@ -1709,14 +1827,14 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(label,
-                      style:
-                          const TextStyle(fontSize: 11, color: Colors.black45)),
+                      style: GoogleFonts.urbanist(
+                          fontSize: 11, color: Colors.white38)),
                   const SizedBox(height: 1),
                   Text(value,
-                      style: const TextStyle(
+                      style: GoogleFonts.urbanist(
                           fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.black87)),
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white)),
                 ],
               ),
             ),

@@ -32,6 +32,8 @@ class AuthService {
   // Stream to listen to the user's login state (logged in vs logged out)
   Stream<User?> get authStateChanges => _auth.authStateChanges();
 
+  User? get currentUser => _auth.currentUser;
+
   String _authErrorMessage(FirebaseAuthException e) {
     switch (e.code) {
       case 'invalid-email':
@@ -124,6 +126,44 @@ class AuthService {
     }
   }
 
+  /// Checks if a session exists and if the user is a driver.
+  Future<bool> isCurrentUserDriver() async {
+    final User? user = _auth.currentUser;
+    if (user == null) return false;
+
+    try {
+      final profile = await _firestoreService.getUserProfile(user.uid);
+      return profile.role == 'driver';
+    } catch (e) {
+      debugPrint("Error checking driver role: $e");
+      return false;
+    }
+  }
+
+  /// Signs in using a PhoneAuthCredential and ensures driver profile exists.
+  Future<User?> signInWithPhoneCredential(
+    AuthCredential credential, {
+    Map<String, dynamic>? driverData,
+  }) async {
+    try {
+      final result = await _auth.signInWithCredential(credential);
+      if (result.user != null) {
+        await _firestoreService.initializeDriverProfile(
+          result.user!.uid,
+          name: driverData?['name'],
+          email: driverData?['email'],
+          vehicleType: driverData?['vehicleType'],
+          vehicleModel: driverData?['vehicleModel'],
+          licenseNumber: driverData?['licenseNumber'],
+          plateNumber: driverData?['plateNumber'],
+        );
+      }
+      return result.user;
+    } on FirebaseAuthException catch (e) {
+      throw Exception(_authErrorMessage(e));
+    }
+  }
+
   // ✨ GOOGLE INTERACTION SIGN-IN ENGINE (v7.x API - Multiplatform Safe)
   Future<User?> signInWithGoogle() async {
     try {
@@ -212,15 +252,11 @@ class AuthService {
   /// HELPER: Normalizes phone numbers to E.164 format (+254...)
   String _normalizePhone(String phone) {
     String p = phone.trim().replaceAll(RegExp(r'\D'), '');
-    // Handle already full format
-    if (p.startsWith('254') && p.length == 12) {
-      return '+$p';
-    }
-    // Handle local 07... format
-    if (p.startsWith('0')) {
+
+    // SMART PHONE PARSING: Strips leading 0 and appends +254
+    if ((p.startsWith('07') || p.startsWith('01')) && p.length >= 10) {
       return '+254${p.substring(1)}';
     }
-    // Handle 7... format
     if (p.length == 9 && (p.startsWith('7') || p.startsWith('1'))) {
       return '+254$p';
     }
@@ -277,8 +313,8 @@ class AuthService {
   // ✨ PRODUCTION SIGNUP FLOW: Trigger verifyPhoneNumber SMS OTP
   Future<void> signUpWithPhoneOtp({
     required String phoneNumber,
-    required Function(String verificationId) onCodeSent,
-    required Function(String error) onFailed,
+    required void Function(String verificationId) onCodeSent,
+    required void Function(String error) onFailed,
     RecaptchaVerifier? webVerifier,
   }) async {
     try {

@@ -42,6 +42,49 @@ class FirestoreService {
     return UserModel.fromMap(doc.data() as Map<String, dynamic>, doc.id);
   }
 
+  /// Specific initialization for Driver roles to match the state machine architecture.
+  Future<void> initializeDriverProfile(
+    String uid, {
+    String? name,
+    String? email,
+    String? vehicleType,
+    String? vehicleModel,
+    String? licenseNumber,
+    String? plateNumber,
+    String? phoneNumber,
+  }) async {
+    final docRef = _db.collection('users').doc(uid);
+    final doc = await docRef.get().timeout(const Duration(seconds: 12));
+
+    Map<String, dynamic>? existingData;
+    if (doc.exists) {
+      existingData = doc.data() as Map<String, dynamic>;
+    }
+
+    // For first-time signup or conversion, ensure these explicit keys are set.
+    await docRef.set({
+      'uid': uid,
+      'name': name ?? (existingData?['name'] as String? ?? ''),
+      'email': email ?? (existingData?['email'] as String? ?? ''),
+      'phoneNumber':
+          phoneNumber ?? (existingData?['phoneNumber'] as String? ?? ''),
+      'vehicleType':
+          vehicleType ?? (existingData?['vehicleType'] as String? ?? 'tulia'),
+      'vehicleModel':
+          vehicleModel ?? (existingData?['vehicleModel'] as String? ?? ''),
+      'licenseNumber':
+          licenseNumber ?? (existingData?['licenseNumber'] as String? ?? ''),
+      'plateNumber':
+          plateNumber ?? (existingData?['plateNumber'] as String? ?? ''),
+      'role': 'driver',
+      'status': 'idle',
+      'isOnline': false,
+      'wallet': 0.0,
+      'createdAt': existingData?['createdAt'] ?? FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true)).timeout(const Duration(seconds: 12));
+  }
+
   Future<List<RideRequest>> getUserRideHistory(
     String userId, {
     int limit = 12,
