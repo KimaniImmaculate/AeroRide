@@ -13,6 +13,7 @@ import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import '../../utils/fare_calculator.dart';
+import '../../utils/location_utils.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../../controllers/ride_controller.dart';
@@ -28,6 +29,7 @@ import '../../theme/aeroride_theme.dart';
 import '../../utils/currency.dart';
 import '../../utils/browser_geolocation.dart';
 import '../../widgets/aeroride_components.dart';
+import '../../utils/exceptions.dart'; // Import the new exceptions
 import 'support_view.dart';
 import 'directions_route_provider.dart';
 import 'wallet_view.dart';
@@ -100,7 +102,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
   List<LatLng> _actualRoadPoints = [];
   int _currentWaypointIndex = 0;
   double _liveTraveledDistanceKm = 0.0;
-  double _liveRunningFareKsh = 100.0;
+  double _liveRunningFareKsh = 0.0; // Will be set to base fare on trip start
   double _liveDriverEarningsKsh = 0.0;
   int _etaMinutes = 5;
   double _calculatedFareKsh = 0.0;
@@ -197,6 +199,10 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
       }
     };
     _rideController.addListener(_rideControllerListener!);
+    _rideController.onRideCompleted = (driverId, driverName) {
+      // This is handled by the rating modal, but we can add any other post-completion logic here.
+      debugPrint("Ride completed callback received for driver: $driverName");
+    };
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       unawaited(_rideController.startRiderLocationTracking());
@@ -209,6 +215,11 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
     final initialPhone = currentUser?.phoneNumber?.toString() ?? '';
     if (initialPhone.isNotEmpty) {
       _mpesaPhoneController.text = initialPhone;
+    }
+
+    if (_rideController.selectedTier != null) {
+      _liveRunningFareKsh =
+          FareCalculator.getRates(_rideController.selectedTier!.id)['base']!;
     }
 
     _rideController.onDriverArrived = (driverName, vehicleInfo) {
@@ -611,8 +622,8 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
         _calculatedFareKsh =
             _rideController.selectedTier!.estimateFare(distanceInKm);
       } else {
-        final fare = computeFareAndEarnings(distanceInKm, 0.0);
-        _calculatedFareKsh = fare.passengerFare;
+        _calculatedFareKsh =
+            FareCalculator.calculateFare('tulia', distanceInKm);
       }
 
       await _loadNearbyDrivers(_riderLocation!);
@@ -708,7 +719,8 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
           num.tryParse(durationString.replaceAll('s', '')) ?? 0;
       final durationMins = durationSeconds / 60.0;
 
-      final fare = computeFareAndEarnings(distanceKm, durationMins);
+      final fareValue = FareCalculator.calculateFare(
+          _rideController.selectedTier?.id, distanceKm);
 
       final polylineData = route['polyline'] as Map<String, dynamic>?;
       final encodedPolyline = polylineData?['encodedPolyline']?.toString();
@@ -728,7 +740,7 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
       setState(() {
         _actualRoadPoints = roadRoute;
-        _calculatedFareKsh = fare.passengerFare;
+        _calculatedFareKsh = fareValue;
         _mapPolylines.clear();
         _mapPolylines.add(
           Polyline(
@@ -927,34 +939,33 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
     setState(() {
       _isProcessingPinInput = true;
-      // Explicitly set the status so the UI shows a stable transition state
-      _currentRideStatus = 'processing_pin';
     });
 
     try {
-      // Wait 7 seconds to assume the driver is inputting the PIN
-      await Future.delayed(const Duration(seconds: 7));
+      // 1. Sync the 'started' status to Firestore via the controller
+      await _rideController.startActiveRide();
 
-      // MANUAL SIGNAL: Update Firestore to 'started'.
-      // This triggers SimulationService to begin Leg 3 and the Taximeter to show.
-      await FirebaseFirestore.instance
-          .collection('rides')
-          .doc(_currentRideDocumentId!)
-          .update({
-        'status': 'started',
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-    } catch (e) {
-      debugPrint("PIN Verification simulation failed: $e");
-    } finally {
+      // 2. Mock a brief verification delay for UX realism
+      await Future.delayed(const Duration(seconds: 1));
+
       if (mounted) {
         setState(() {
-          _isProcessingPinInput = false;
           _currentRideState = RideState.inTransit;
           isArrived = false;
-          _currentRideStatus = 'started';
           isTripStarted = true;
         });
+
+        // 3. START JOURNEY SIMULATION: Kick off the actual transit leg to destination
+        if (_riderLocation != null && _destinationLocation != null) {
+          await _fetchRoadRouteForPhase(_riderLocation!, _destinationLocation!);
+          _startProgressiveInTransitSimulation(TravelPhase.riderToDestination);
+        }
+      }
+    } catch (e) {
+      _showToastError("Trip failed to engage: $e");
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessingPinInput = false);
       }
     }
   }
@@ -1198,8 +1209,10 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
 
     if (phase == TravelPhase.riderToDestination) {
       _liveTraveledDistanceKm = 0.0;
-      _liveRunningFareKsh = 100.0;
-      _liveDriverEarningsKsh = 0.0;
+      final rates = FareCalculator.getRates(_rideController.selectedTier?.id);
+      _liveRunningFareKsh = rates['base']!;
+      _liveDriverEarningsKsh =
+          FareCalculator.calculateDriverEarnings(rates['base']!);
       if (_etaMinutes <= 0) {
         _etaMinutes = 8;
       }
@@ -1440,6 +1453,81 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
     });
   }
 
+  // Helper to reset UI state after a ride is completed or cancelled
+  void _resetRideState() {
+    setState(() {
+      _currentRideState = RideState.idle;
+      _selectedDriver = null;
+      _currentRideDocumentId = null;
+      _pickupTextController.clear();
+      _destinationTextController.clear();
+      _mapPolylines.clear();
+      _mapMarkers.clear();
+      _riderLocation = null;
+      _destinationLocation = null;
+      _driverLocation = null;
+      _liveTraveledDistanceKm = 0.0;
+      _liveRunningFareKsh = 0.0;
+      _liveDriverEarningsKsh = 0.0;
+      _etaMinutes = 5;
+      _calculatedFareKsh = 0.0;
+      _isProcessingPinInput = false;
+      _paymentStatusMessage = '';
+      _isPaymentProcessing = false;
+      isArrived = false;
+      isTripStarted = false;
+      _currentRideStatus = "idle";
+    });
+    _rideController.cancelActiveTracking();
+    _rideController.selectedTier = null;
+  }
+
+  Future<void> _cancelRideRequest() async {
+    try {
+      await _rideController.cancelActiveRide();
+      _resetRideState();
+      _showToastError("Ride request cancelled successfully.");
+    } on NotAuthenticatedException catch (e) {
+      _showToastError(e.message);
+    } on CancellationPenaltyException catch (e) {
+      _resetRideState();
+      _showToastError(e.message);
+    } catch (e) {
+      _showToastError("Failed to cancel request: ${e.toString()}");
+    }
+  }
+
+  Future<void> _stopTripMidWay() async {
+    _simulationTimer?.cancel();
+    _inTransitTimer?.cancel();
+
+    final rideDocId = _currentRideDocumentId;
+    if (rideDocId == null) return;
+
+    final String tierId = _rideController.selectedTier?.id ?? 'tulia';
+    final double currentDistance = _liveTraveledDistanceKm;
+    final finalFare = FareCalculator.calculateFare(tierId, currentDistance);
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('rides')
+          .doc(rideDocId)
+          .update({
+        'status': 'completed',
+        'finalFareCharged': finalFare.round(),
+        'completedAt': FieldValue.serverTimestamp(),
+      });
+
+      setState(() {
+        _calculatedFareKsh = finalFare;
+        _currentRideState = RideState.payment;
+      });
+      _rideController.cancelActiveTracking();
+    } catch (e) {
+      _showToastError("Error stopping trip: $e");
+    }
+  }
+
   Future<void> _showProfileSheet() async {
     await showModalBottomSheet<void>(
       context: context,
@@ -1577,7 +1665,9 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                             ),
                           ),
                           Text(
-                            widget.user?.email ?? 'passenger@aeroride.com',
+                            _currentUserModel?.email ??
+                                widget.user?.email ??
+                                'passenger@aeroride.com',
                             style: const TextStyle(
                               fontSize: 12,
                               color: Colors.grey,
@@ -2034,6 +2124,19 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
             const Text(
                 'Dispatching vehicle tracking requests across servers...',
                 style: TextStyle(fontSize: 12, color: Colors.grey)),
+            const SizedBox(height: 20),
+            OutlinedButton(
+              onPressed: _cancelRideRequest,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.red,
+                side: const BorderSide(color: Colors.red),
+                minimumSize: const Size.fromHeight(45),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              child: const Text('CANCEL REQUEST',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
           ],
         );
 
@@ -2075,6 +2178,19 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
               value: _movingProgress,
               color: Colors.orange,
               backgroundColor: Colors.orange.shade50,
+            ),
+            const SizedBox(height: 16),
+            TextButton.icon(
+              onPressed: _stopTripMidWay,
+              icon: const Icon(Icons.stop_circle, color: Colors.red),
+              label: const Text(
+                'STOP TRIP HERE',
+                style: TextStyle(
+                    color: Colors.red,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13),
+              ),
+              style: TextButton.styleFrom(alignment: Alignment.centerLeft),
             ),
           ],
         );
@@ -2161,6 +2277,17 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                 value: _movingProgress,
                 color: Colors.blue,
                 backgroundColor: Colors.blue.shade50),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _stopTripMidWay,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red.shade50,
+                foregroundColor: Colors.red,
+                elevation: 0,
+              ),
+              child: const Text('END TRIP EARLY',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
           ],
         );
 
@@ -2248,6 +2375,17 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                     : 'Pay Now via M-Pesa STK',
                 style: const TextStyle(
                     color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextButton(
+              onPressed: _stopTripMidWay,
+              child: const Text(
+                'CANCEL RIDE',
+                style: TextStyle(
+                    color: Colors.redAccent,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13),
               ),
             ),
           ],
@@ -3058,7 +3196,15 @@ class _RiderDashboardViewState extends State<RiderDashboardView> {
                                                   .isEmpty ||
                                               passwordController.text
                                                   .trim()
-                                                  .isEmpty)) return;
+                                                  .isEmpty)) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          const SnackBar(
+                                              content: Text(
+                                                  'Please enter your email/phone and password.')),
+                                        );
+                                        return;
+                                      }
 
                                       setDialogState(
                                           () => isProcessingAuth = true);

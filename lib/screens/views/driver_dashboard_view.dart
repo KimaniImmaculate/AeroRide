@@ -10,6 +10,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
+import '../../utils/location_utils.dart';
 import '../../utils/fare_calculator.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
@@ -17,11 +18,15 @@ import 'package:provider/provider.dart';
 import '../../screens/driver/driver_profile_screen.dart';
 import 'support_view.dart';
 import 'wallet_view.dart';
+import '../../widgets/rating_modal.dart';
+import '../../services/auth_service.dart';
 import '../../theme/aeroride_theme.dart';
 import 'package:aeroride/screens/views/gateway_portal.dart';
+import '../../services/shimmer_placeholder.dart';
 import '../../services/firestore_service.dart';
 import '../../services/mock_route_service.dart';
 import '../../models/ride_request_model.dart';
+import '../../widgets/user_profile_view.dart';
 import '../../utils/location_extensions.dart';
 
 class MockRideRequest {
@@ -502,11 +507,16 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const SizedBox(
+                ShimmerPlaceholder(
+                  child: Container(
                     width: 18,
                     height: 18,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 3, color: signatureTurquoise)),
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                     child: Text("SCANNING GRID TELEMETRY...",
@@ -665,11 +675,18 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
             const SizedBox(height: 6),
             Row(
               children: [
-                const SizedBox(
+                ShimmerPlaceholder(
+                  baseColor: Colors.white.withOpacity(0.2),
+                  highlightColor: Colors.white.withOpacity(0.5),
+                  child: Container(
                     width: 12,
                     height: 12,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: signatureTurquoise)),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
@@ -715,7 +732,19 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const SizedBox(width: 14),
+                ShimmerPlaceholder(
+                  baseColor: Colors.white.withOpacity(0.2),
+                  highlightColor: Colors.white.withOpacity(0.5),
+                  child: Container(
+                    width: 14,
+                    height: 14,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
                 Text("Awaiting Rider Wallet transaction auth...",
                     style: GoogleFonts.urbanist(
                         fontWeight: FontWeight.w700,
@@ -883,7 +912,7 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       builder: (context, snapshot) {
         final data = snapshot.data?.data() as Map<String, dynamic>?;
         final String name = data?['name'] ?? data?['fullName'] ?? "Driver";
-        final String email = data?['email'] ?? "partner@aeroride.com";
+        final String email = data?['email'] ?? widget.user?.email ?? "";
 
         // Initials logic
         final initials = name
@@ -897,7 +926,13 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
           child: GestureDetector(
-            onTap: () => _showDriverQuickAccountSheet(context),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (context) => const UserProfileView()),
+              );
+            },
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: BoxDecoration(
@@ -994,13 +1029,9 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       activeRideDocId = selectedRide['id']?.toString();
       _currentState = DriverTerminalState.accepted;
 
-      double distanceMeters = Geolocator.distanceBetween(
-        _driverCurrentLocation.latitude,
-        _driverCurrentLocation.longitude,
-        pickupLatLng.latitude,
-        pickupLatLng.longitude,
-      );
-      _etaMinutes = ((distanceMeters / 1000) * 2).round().clamp(2, 25);
+      double distanceKm = LocationUtils.calculateDistanceKm(
+          _driverCurrentLocation, pickupLatLng);
+      _etaMinutes = LocationUtils.calculateETA(distanceKm).clamp(2, 25);
     });
 
     _rebuildMapElements();
@@ -1047,17 +1078,6 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
     if (_currentState != DriverTerminalState.arrived &&
         _currentState != DriverTerminalState.inTransit) return;
 
-    double calculateDistance(LatLng p1, LatLng p2) {
-      const p = 0.017453292519943295;
-      final a = 0.5 -
-          math.cos((p2.latitude - p1.latitude) * p) / 2 +
-          math.cos(p1.latitude * p) *
-              math.cos(p2.latitude * p) *
-              (1 - math.cos((p2.longitude - p1.longitude) * p)) /
-              2;
-      return 12742 * math.asin(math.sqrt(a));
-    }
-
     setState(() {
       _currentState = DriverTerminalState.inTransit;
       // Ensure index starts at zero if not set
@@ -1091,25 +1111,20 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
         final previousPos = _driverWaypointIndex > 0
             ? _driverActualRoadPoints[_driverWaypointIndex - 1]
             : _driverCurrentLocation;
-        final segmentMeters = Geolocator.distanceBetween(
-          previousPos.latitude,
-          previousPos.longitude,
-          currentPos.latitude,
-          currentPos.longitude,
-        );
-        final segmentKm = segmentMeters / 1000.0;
+        final segmentKm =
+            LocationUtils.calculateDistanceKm(previousPos, currentPos);
 
         setState(() {
           // move the live vehicle marker
           _driverCurrentLocation = currentPos;
 
           // accumulate trip distance, then update fares and earnings using the
-          // pricing calculator so fare rises as the journey progresses.
+          // tier rates so fare rises as the journey progresses.
           _driverTraveledDistanceKm += segmentKm;
-          final fareResult =
-              computeFareAndEarnings(_driverTraveledDistanceKm, 0.0);
-          _passengerLiveFareKsh = fareResult.passengerFare;
-          _driverLiveEarningsKsh = fareResult.driverEarnings;
+          _passengerLiveFareKsh = FareCalculator.calculateFare(
+              _activeRequest?.rideTier, _driverTraveledDistanceKm);
+          _driverLiveEarningsKsh =
+              FareCalculator.calculateDriverEarnings(_passengerLiveFareKsh);
 
           _driverWaypointIndex++;
         });
@@ -1167,8 +1182,11 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       activeRideDocId = selectedRequest.id;
       _driverWaypointIndex = 0;
       _driverTraveledDistanceKm = 0.0;
-      _driverLiveEarningsKsh = 0.0;
-      _passengerLiveFareKsh = 100.0;
+
+      _passengerLiveFareKsh =
+          FareCalculator.getRates(_activeRequest?.rideTier)['base']!;
+      _driverLiveEarningsKsh =
+          FareCalculator.calculateDriverEarnings(_passengerLiveFareKsh);
       _paymentReceived = false;
       _isProcessingPaymentPush = false;
     });
@@ -1299,8 +1317,11 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
             _currentState = DriverTerminalState.arrived;
             _etaMinutes = 0;
             _driverTraveledDistanceKm = 0.0;
-            _passengerLiveFareKsh = 100.0;
-            _driverLiveEarningsKsh = 0.0;
+
+            _passengerLiveFareKsh =
+                FareCalculator.getRates(_activeRequest?.rideTier)['base']!;
+            _driverLiveEarningsKsh =
+                FareCalculator.calculateDriverEarnings(_passengerLiveFareKsh);
           });
 
           final destinationLatLng = _activeRideData?['destinationLatLng'];
@@ -1354,6 +1375,35 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
       _isTripActive = false;
       _currentState = DriverTerminalState.completing;
     });
+
+    if (activeRideDocId != null) {
+      await FirebaseFirestore.instance
+          .collection('rides')
+          .doc(activeRideDocId)
+          .update({
+        'status': 'completed',
+        'finalFareCharged': _passengerLiveFareKsh,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    // Show rating modal for the rider
+    if (mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => RatingModal(
+          targetName: _activeRequest?.riderName ?? "Passenger",
+          onRatingSubmitted: (rating) async {
+            Navigator.pop(context);
+            if (_activeRequest?.userId != null) {
+              await AuthService()
+                  .updateUserRating(_activeRequest!.userId, rating);
+            }
+          },
+        ),
+      );
+    }
   }
 
   void _resetDriverDashboard() {
@@ -1629,78 +1679,89 @@ class _DriverDashboardViewState extends State<DriverDashboardView> {
                   const SizedBox(height: 20),
 
                   // THE WORKSPACE TOGGLE SWITCH CARD
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color:
-                          _isOnline ? Colors.grey.shade100 : Colors.red.shade50,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                          color: _isOnline
-                              ? Colors.transparent
-                              : Colors.red.shade100),
-                    ),
-                    child: Row(
-                      children: [
-                        CircleAvatar(
-                          radius: 24,
-                          backgroundColor: Colors.black87,
-                          child: Text(
-                            (widget.user?.displayName ?? "A")
-                                .substring(0, 1)
-                                .toUpperCase(),
-                            style: GoogleFonts.urbanist(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w900,
-                                fontSize: 16),
+                  GestureDetector(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (context) => const UserProfileView()),
+                      );
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: _isOnline
+                            ? Colors.grey.shade100
+                            : Colors.red.shade50,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                            color: _isOnline
+                                ? Colors.transparent
+                                : Colors.red.shade100),
+                      ),
+                      child: Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 24,
+                            backgroundColor: Colors.black87,
+                            child: Text(
+                              (widget.user?.displayName ?? "A")
+                                  .substring(0, 1)
+                                  .toUpperCase(),
+                              style: GoogleFonts.urbanist(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 16),
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // Added null check for displayName
-                              Text(
-                                  widget.user?.displayName ??
-                                      "AeroRide Partner",
-                                  style: GoogleFonts.urbanist(
-                                      fontWeight: FontWeight.w900,
-                                      fontSize: 15,
-                                      color: Colors.white)),
-                              const SizedBox(height: 2),
-                              Text(
-                                  _isOnline
-                                      ? "Duty Status: Available"
-                                      : "Duty Status: Offline",
-                                  style: GoogleFonts.urbanist(
-                                      fontSize: 11,
-                                      color:
-                                          _isOnline ? Colors.green : Colors.red,
-                                      fontWeight: FontWeight.w900)),
-                            ],
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // Added null check for displayName
+                                Text(
+                                    widget.user?.displayName ??
+                                        "AeroRide Partner",
+                                    style: GoogleFonts.urbanist(
+                                        fontWeight: FontWeight.w900,
+                                        fontSize: 15,
+                                        color: Colors.white)),
+                                const SizedBox(height: 2),
+                                Text(
+                                    _isOnline
+                                        ? "Duty Status: Available"
+                                        : "Duty Status: Offline",
+                                    style: GoogleFonts.urbanist(
+                                        fontSize: 11,
+                                        color: _isOnline
+                                            ? Colors.green
+                                            : Colors.red,
+                                        fontWeight: FontWeight.w900)),
+                              ],
+                            ),
                           ),
-                        ),
-                        Switch.adaptive(
-                          value: _isOnline,
-                          activeColor: Colors.green,
-                          onChanged: (bool value) {
-                            setState(() {
-                              _isOnline = value;
-                              if (!_isOnline) {
-                                // Go offline: cancel live subscription and clear market
-                                _isSearchingForRides = false;
-                                _availableRequests.clear();
-                                _driverSimulationTimer?.cancel();
-                                _driverRequestsSub?.cancel();
-                                _driverRequestsSub = null;
-                              } else {
-                                _autoTriggerIncomingRideSearch();
-                              }
-                            });
-                          },
-                        ),
-                      ],
+                          Switch.adaptive(
+                            value: _isOnline,
+                            activeColor: Colors.green,
+                            onChanged: (bool value) {
+                              setState(() {
+                                _isOnline = value;
+                                if (!_isOnline) {
+                                  // Go offline: cancel live subscription and clear market
+                                  _isSearchingForRides = false;
+                                  _availableRequests.clear();
+                                  _driverSimulationTimer?.cancel();
+                                  _driverRequestsSub?.cancel();
+                                  _driverRequestsSub = null;
+                                } else {
+                                  _autoTriggerIncomingRideSearch();
+                                }
+                              });
+                            },
+                          ),
+                        ],
+                      ),
                     ),
                   ),
 

@@ -6,6 +6,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flutter/foundation.dart';
 import 'package:aeroride/services/mock_route_service.dart';
+import 'package:aeroride/utils/fare_calculator.dart';
+import 'package:aeroride/utils/location_utils.dart';
 
 class SimulationService {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -89,8 +91,15 @@ class SimulationService {
       await _db.collection(_simulatedDriversCollection).doc(id).set({
         'name': 'Sim Driver ${i + 1}',
         'phone': '+254700000${i + 1}',
-        'vehicleModel': ['Toyota Prius', 'Honda Fit', 'Nissan Note'][i % 3],
-        'vehicleColor': ['Blue', 'White', 'Silver'][i % 3],
+        // Cycles through all 4 local asset tiers including pamoja
+        'vehicleTier': ['tulia', 'nuru', 'pamoja', 'waziri'][i % 4],
+        'vehicleModel': [
+          'Toyota Vitz',
+          'Toyota Premio',
+          'Honda Freed',
+          'Toyota Prado'
+        ][i % 4],
+        'vehicleColor': ['Blue', 'White', 'Silver', 'Black'][i % 4],
         'rating': 4.7 + (i % 3) * 0.1,
         'current_location': GeoPoint(lat, lng),
         'location': GeoPoint(lat, lng),
@@ -107,6 +116,59 @@ class SimulationService {
     }
 
     return created;
+  }
+
+  /// NEW: Seeds mock ride requests from existing riders to be picked up by drivers.
+  /// This is what the "Grid Telemetry" is looking for.
+  static Future<void> seedMockRequestsForNearbyDrivers({
+    required LatLng area,
+    int count = 3,
+  }) async {
+    final rnd = Random();
+    final List<String> tiers = ['tulia', 'nuru', 'pamoja', 'waziri'];
+
+    // Find some existing riders to "act" as the requesters
+    final ridersQuery = await _db
+        .collection('users')
+        .where('role', isEqualTo: 'rider')
+        .limit(10)
+        .get();
+
+    for (var i = 0; i < count; i++) {
+      final riderDoc = ridersQuery.docs.isNotEmpty
+          ? ridersQuery.docs[i % ridersQuery.docs.length]
+          : null;
+
+      final riderId = riderDoc?.id ?? 'sim-rider-$i';
+      final riderName = riderDoc?.data()['name'] ?? 'AeroRide Rider';
+
+      final pickup = LatLng(
+        area.latitude + (rnd.nextDouble() - 0.5) * 0.01,
+        area.longitude + (rnd.nextDouble() - 0.5) * 0.01,
+      );
+      final destination = LatLng(
+        area.latitude + (rnd.nextDouble() - 0.5) * 0.03,
+        area.longitude + (rnd.nextDouble() - 0.5) * 0.03,
+      );
+
+      final tierId = tiers[rnd.nextInt(tiers.length)];
+      final distance = LocationUtils.calculateDistanceKm(pickup, destination);
+      final fare = FareCalculator.calculateFare(tierId, distance);
+
+      await _db.collection('ride_requests').add({
+        'userId': riderId,
+        'riderName': riderName,
+        'status': 'searching',
+        'pickupLocation': GeoPoint(pickup.latitude, pickup.longitude),
+        'destinationLocation':
+            GeoPoint(destination.latitude, destination.longitude),
+        'pickupAddress': 'Simulated Pickup Point',
+        'destinationAddress': 'Simulated Drop-off Point',
+        'rideTier': tierId,
+        'estimatedCost': fare,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
   }
 
   static void _startMovingDriver(String id, LatLng start) {
@@ -158,7 +220,6 @@ class SimulationService {
     final base = center ?? const LatLng(-1.2833, 36.8167);
 
     for (var i = 0; i < count; i++) {
-      final estimatedCost = 10 + rnd.nextDouble() * 20;
       final pickup = LatLng(
         base.latitude + (rnd.nextDouble() - 0.5) * 0.02,
         base.longitude + (rnd.nextDouble() - 0.5) * 0.02,
@@ -168,11 +229,16 @@ class SimulationService {
         base.longitude + (rnd.nextDouble() - 0.5) * 0.02,
       );
 
+      final tierId = ['tulia', 'nuru', 'pamoja', 'waziri'][i % 4];
+      final distance = LocationUtils.calculateDistanceKm(pickup, dest);
+      final estimatedCost = FareCalculator.calculateFare(tierId, distance);
+
       try {
         await _db.collection('rides').add({
           'userId': 'sim-user-$i',
           'driverId': null,
           'candidateDrivers': [driverUid],
+          'rideTier': tierId,
           'pickupLocation': GeoPoint(pickup.latitude, pickup.longitude),
           'destinationLocation': GeoPoint(dest.latitude, dest.longitude),
           'pickupAddress': 'Sim Pickup $i',
@@ -237,8 +303,9 @@ class SimulationService {
     );
 
     final rideSnap = await _db.collection('rides').doc(rideId).get();
-    final status = rideSnap.data()?['status'] ?? '';
-
+    final rideData = rideSnap.data() ?? {};
+    final status = rideData['status'] ?? '';
+    final tierId = (rideData['rideTier'] ?? 'tulia').toString().toLowerCase();
     int step = 0;
     // 1: moving to pickup, 3: moving to destination (2: waiting is now handled by UI)
     int leg = (status == 'started' || status == 'inTransit') ? 3 : 1;
@@ -311,6 +378,15 @@ class SimulationService {
           // Leg 3: Moving to destination
           if (step < toDestPoints.length) {
             final pos = toDestPoints[step];
+
+            // Calculate live fare based on simulated progress
+            final totalDist =
+                LocationUtils.calculateDistanceKm(pickup, destination);
+            final progress = (step + 1) / toDestPoints.length;
+            final currentDistKm = totalDist * progress;
+            final liveFare =
+                FareCalculator.calculateFare(tierId, currentDistKm);
+
             await _db
                 .collection(_simulatedDriversCollection)
                 .doc(driverId)
@@ -332,6 +408,7 @@ class SimulationService {
                   pos.latitude,
                   pos.longitude,
                 ),
+                'estimatedCost': liveFare,
                 'updatedAt': Timestamp.now(),
               },
               SetOptions(merge: true),

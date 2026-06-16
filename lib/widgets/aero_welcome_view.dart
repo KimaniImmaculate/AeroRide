@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:aeroride/widgets/vehicle_selection_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:aeroride/services/auth_service.dart';
+import 'package:aeroride/services/shimmer_placeholder.dart';
 
 /// A premium welcome screen featuring centered glassmorphism and elite branding.
 class AeroWelcomeView extends StatelessWidget {
@@ -14,19 +15,10 @@ class AeroWelcomeView extends StatelessWidget {
     return Scaffold(
       body: Stack(
         children: [
-          // Layer 1: High-Resolution Immersive Background
-          Positioned.fill(
-            child: Image.asset(
-              'assets/skyline (2).jpg',
-              fit: BoxFit.cover,
-              errorBuilder: (context, error, stackTrace) => Container(
-                color: const Color(0xFF0A0A0A),
-                child: const Center(
-                  child: Icon(Icons.image_not_supported_outlined,
-                      color: Colors.white24, size: 40),
-                ),
-              ),
-            ),
+          // Layer 1: High-Resolution Background with Shimmer Skeleton
+          const ShimmerBackground(
+            assetPath: 'assets/skyline (2).jpg',
+            opacity: 1.0,
           ),
 
           // Layer 2: Subtle Cinematic Overlay

@@ -1,21 +1,25 @@
-class FareResult {
-  final double passengerFare;
-  final double driverEarnings;
+class FareCalculator {
+  // Static pricing configuration for consistency across the system
+  static const Map<String, Map<String, double>> _tierPricing = {
+    'tulia': {'base': 150.0, 'km': 45.0},
+    'nuru': {'base': 350.0, 'km': 80.0},
+    'pamoja': {'base': 500.0, 'km': 110.0},
+    'waziri': {'base': 700.0, 'km': 150.0},
+  };
 
-  FareResult(this.passengerFare, this.driverEarnings);
-}
+  /// Returns the base fare and per km rate for a given tier.
+  static Map<String, double> getRates(String? tierId) {
+    return _tierPricing[tierId?.toLowerCase()] ?? _tierPricing['tulia']!;
+  }
 
-// Pricing constants (restored original model)
-const double kBaseFare = 100.0;
-const double kPerKm = 90.0;
-const double kPerMin = 3.0;
-const double kCommissionPct = 0.80; // driver receives 80% of passenger fare
-const double kMinFare = 200.0;
+  /// Calculates the total fare for a trip based on distance (km).
+  static double calculateFare(String? tierId, double distanceKm) {
+    final rates = getRates(tierId);
+    return rates['base']! + (distanceKm * rates['km']!);
+  }
 
-FareResult computeFareAndEarnings(double distanceKm, double durationMin) {
-  final double rawFare =
-      kBaseFare + (distanceKm * kPerKm) + (durationMin * kPerMin);
-  final double passengerFare = rawFare < kMinFare ? kMinFare : rawFare;
-  final double driverEarnings = passengerFare * kCommissionPct;
-  return FareResult(passengerFare, driverEarnings);
+  /// Calculates the driver's net earnings (85% of total fare).
+  static double calculateDriverEarnings(double totalFare) {
+    return totalFare * 0.85; // 15% platform commission
+  }
 }

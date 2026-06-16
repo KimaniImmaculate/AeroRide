@@ -1,12 +1,15 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:aeroride/models/user_model.dart';
 import 'package:aeroride/services/firestore_service.dart';
 import 'package:firebase_auth_platform_interface/firebase_auth_platform_interface.dart'
     show FirebaseAuthPlatform;
 import 'package:google_sign_in/google_sign_in.dart';
-import 'package:flutter/foundation.dart'; // For debugPrint and kIsWeb
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 
 /// A wrapper class to pass both a potential User or an active MFA Session back to your UI
 class AeroRideLoginResult {
@@ -25,6 +28,63 @@ class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final GoogleSignIn _googleSignIn = GoogleSignIn.instance;
   final FirestoreService _firestoreService = FirestoreService();
+
+  /// Uploads a file to Firebase Storage and returns the download URL.
+  Future<String?> uploadProfileImage(String uid, File imageFile) async {
+    try {
+      final ref = FirebaseStorage.instance
+          .ref()
+          .child('profile_pics')
+          .child('$uid.jpg');
+      final uploadTask = ref.putFile(imageFile);
+      final snapshot = await uploadTask;
+      return await snapshot.ref.getDownloadURL();
+    } catch (e) {
+      debugPrint("Storage Upload Error: $e");
+      return null;
+    }
+  }
+
+  /// Updates the user's Firestore profile document.
+  Future<void> updateProfileData(
+      String uid, Map<String, dynamic> updates) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .update(updates);
+    } catch (e) {
+      debugPrint("Profile Update Error: $e");
+      rethrow;
+    }
+  }
+
+  /// Updates a user's average rating based on a new review.
+  /// This applies to both riders and drivers.
+  Future<void> updateUserRating(String uid, double newRating) async {
+    try {
+      final userDoc = FirebaseFirestore.instance.collection('users').doc(uid);
+
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final snapshot = await transaction.get(userDoc);
+        if (!snapshot.exists) return;
+
+        final data = snapshot.data()!;
+        double currentRating = (data['rating'] ?? 5.0).toDouble();
+        int totalReviews = data['totalReviews'] ?? 0;
+
+        double updatedRating =
+            ((currentRating * totalReviews) + newRating) / (totalReviews + 1);
+
+        transaction.update(userDoc, {
+          'rating': updatedRating,
+          'totalReviews': totalReviews + 1,
+        });
+      });
+    } catch (e) {
+      debugPrint("Error updating user rating: $e");
+    }
+  }
 
   ConfirmationResult? _webConfirmationResult;
   DateTime? _profileWriteBackoffUntil;
@@ -86,6 +146,17 @@ class AuthService {
 
   void _beginProfileWriteBackoff() {
     _profileWriteBackoffUntil = DateTime.now().add(const Duration(minutes: 2));
+  }
+
+  /// Pre-caches heavy background assets to prevent flickering on first load.
+  Future<void> precacheBackgrounds(BuildContext context) async {
+    await Future.wait([
+      // Backgrounds for Gateway, Welcome screens, and Tiers
+      precacheImage(const AssetImage('assets/gateway_bg.jpg'), context),
+      precacheImage(const AssetImage('assets/skyline (2).jpg'), context),
+      precacheImage(const AssetImage('assets/driver_bg.jpg'), context),
+      precacheImage(const AssetImage('assets/tier_selection_bg.jpg'), context),
+    ]);
   }
 
   // ✨ SILENT ANONYMOUS SIGN IN (Lazy Authentication)
@@ -251,16 +322,20 @@ class AuthService {
 
   /// HELPER: Normalizes phone numbers to E.164 format (+254...)
   String _normalizePhone(String phone) {
-    String p = phone.trim().replaceAll(RegExp(r'\D'), '');
+    // Remove all non-numeric characters except for the leading plus
+    String p = phone.trim().replaceAll(RegExp(r'[^\d+]'), '');
+    String digitsOnly = p.replaceAll(RegExp(r'\D'), '');
 
     // SMART PHONE PARSING: Strips leading 0 and appends +254
-    if ((p.startsWith('07') || p.startsWith('01')) && p.length >= 10) {
-      return '+254${p.substring(1)}';
+    if ((digitsOnly.startsWith('07') || digitsOnly.startsWith('01')) &&
+        digitsOnly.length >= 10) {
+      return '+254${digitsOnly.substring(1)}';
     }
-    if (p.length == 9 && (p.startsWith('7') || p.startsWith('1'))) {
-      return '+254$p';
+    if (digitsOnly.length == 9 &&
+        (digitsOnly.startsWith('7') || digitsOnly.startsWith('1'))) {
+      return '+254$digitsOnly';
     }
-    return phone.startsWith('+') ? phone : '+$p';
+    return p.startsWith('+') ? p : '+$digitsOnly';
   }
 
   // ✨ COMPATIBILITY SHIM: Single-shot signUp for legacy views
@@ -270,6 +345,11 @@ class AuthService {
     String password,
     String role, {
     required String phoneNumber,
+    String? vehicleTier,
+    String? vehicleModel,
+    String? vehicleColor,
+    String? plateNumber,
+    File? profileImage,
   }) async {
     // This bypasses the multi-step OTP flow for legacy components.
     // In production, use signUpWithPhoneOtp + verifyOtpAndCompleteSignup.
@@ -286,6 +366,11 @@ class AuthService {
         await user.updateDisplayName(name.trim());
         await user.reload();
 
+        String? profilePicUrl;
+        if (profileImage != null) {
+          profilePicUrl = await uploadProfileImage(user.uid, profileImage);
+        }
+
         final freshUser = _auth.currentUser;
         final profile = UserModel(
           uid: freshUser!.uid,
@@ -294,8 +379,26 @@ class AuthService {
           role: role,
         );
 
-        final userMap = profile.toJson();
-        userMap['phoneNumber'] = _normalizePhone(phoneNumber);
+        // 🛡️ DATA SANITIZATION: Separate base user info from driver-specific telemetry
+        final Map<String, dynamic> userMap = {
+          'uid': profile.uid,
+          'name': name.trim(),
+          'email': email.trim(),
+          'role': role,
+          'phoneNumber': _normalizePhone(phoneNumber),
+          'profilePic': profilePicUrl ?? '',
+          'updatedAt': FieldValue.serverTimestamp(),
+        };
+
+        if (role == 'driver') {
+          userMap['vehicleTier'] = vehicleTier ?? 'tulia';
+          userMap['vehicleModel'] = vehicleModel ?? '';
+          userMap['vehicleColor'] = vehicleColor ?? '';
+          userMap['plateNumber'] = plateNumber ?? '';
+          userMap['isOnline'] = false;
+          userMap['status'] = 'idle';
+        }
+
         await FirebaseFirestore.instance
             .collection('users')
             .doc(freshUser.uid)
@@ -375,6 +478,10 @@ class AuthService {
     required String email,
     required String password,
     String role = 'rider',
+    String? vehicleTier,
+    String? vehicleModel,
+    String? vehicleColor,
+    String? plateNumber,
   }) async {
     try {
       User? currentUser = _auth.currentUser;
@@ -428,6 +535,14 @@ class AuthService {
 
         final userMap = upgradedUser.toJson();
         userMap['phoneNumber'] = finalUser.phoneNumber;
+        if (role == 'driver') {
+          userMap['vehicleTier'] = vehicleTier;
+          userMap['vehicleModel'] = vehicleModel;
+          userMap['vehicleColor'] = vehicleColor;
+          userMap['plateNumber'] = plateNumber;
+          userMap['isOnline'] = false;
+          userMap['status'] = 'offline';
+        }
         await FirebaseFirestore.instance
             .collection('users')
             .doc(finalUser.uid)
@@ -474,17 +589,42 @@ class AuthService {
       // If input is a phone number, resolve the email from Firestore
       if (!email.contains('@')) {
         final formattedPhone = _normalizePhone(email);
-        final userQuery = await FirebaseFirestore.instance
+        debugPrint("AeroRide Auth: Resolving identity for $formattedPhone...");
+
+        var userQuery = await FirebaseFirestore.instance
             .collection('users')
             .where('phoneNumber', isEqualTo: formattedPhone)
             .limit(1)
             .get();
 
+        // Fallback for legacy data or different casing in field names
         if (userQuery.docs.isEmpty) {
-          throw Exception('No account found for this phone number.');
+          userQuery = await FirebaseFirestore.instance
+              .collection('users')
+              .where('phone', isEqualTo: formattedPhone)
+              .limit(1)
+              .get();
         }
-        email = userQuery.docs.first.get('email');
+
+        if (userQuery.docs.isEmpty) {
+          throw Exception(
+              'No AeroRide account found for this phone number. Please sign up first.');
+        }
+
+        final data = userQuery.docs.first.data();
+        final resolvedEmail = data['email']?.toString().trim();
+
+        if (resolvedEmail == null || resolvedEmail.isEmpty) {
+          throw Exception(
+              'Account found but no registered email address was detected.');
+        }
+
+        email = resolvedEmail;
+        debugPrint("AeroRide Auth: Resolved phone to email: $email");
       }
+
+      if (email.isEmpty)
+        throw Exception('Email address is required for authentication.');
 
       UserCredential result = await _auth
           .signInWithEmailAndPassword(
@@ -492,6 +632,18 @@ class AuthService {
             password: password.trim(),
           )
           .timeout(const Duration(seconds: 15));
+
+      // 🛡️ SECURITY SYNC: Verify Firestore document existence post-login
+      if (result.user != null) {
+        final doc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(result.user!.uid)
+            .get();
+        if (!doc.exists) {
+          debugPrint(
+              "AeroRide Warning: Auth successful but user profile document is missing for ${result.user!.uid}");
+        }
+      }
 
       return AeroRideLoginResult(user: result.user);
     } on FirebaseAuthMultiFactorException catch (e) {

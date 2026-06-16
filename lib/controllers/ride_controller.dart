@@ -17,8 +17,13 @@ import 'package:aeroride/models/vehicle_tier_model.dart';
 import 'package:aeroride/models/ride_type_model.dart';
 import 'package:aeroride/services/notification_service.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:aeroride/utils/fare_calculator.dart';
+import 'package:aeroride/utils/location_utils.dart';
+import 'package:aeroride/utils/exceptions.dart'; // Import the new exceptions
 
 typedef ArrivalCallback = void Function(String driverName, String vehicleInfo);
+typedef RideCompletionCallback = void Function(
+    String driverId, String driverName);
 
 class RideController extends ChangeNotifier {
   final FirestoreService _firestoreService = FirestoreService();
@@ -36,6 +41,7 @@ class RideController extends ChangeNotifier {
   String? activeRideId;
 
   void Function(String driverName, String vehicleInfo)? onDriverArrived;
+  RideCompletionCallback? onRideCompleted;
 
   // Active locations and assigned profile
   LatLng? driverLocation;
@@ -98,47 +104,64 @@ class RideController extends ChangeNotifier {
     bool autoAssignDriver = false,
     String rideType = 'standard',
   }) async {
-    var stage = 'starting request';
+    var stage = 'initializing';
     final simulationMode = kDebugMode;
 
     try {
       currentRideStatus = "CONTACTING DRIVER...";
       notifyListeners();
 
+      stage = 'loading ride types';
       // Ensure tiers are loaded if the background task hasn't finished
       if (vehicleTiers.isEmpty) {
         await loadRideTypes();
       }
 
-      // 👤 LAZY-AUTH FALLBACK: If the user hasn't registered a real name yet, enforce a guest placeholder
-      final freshUser = FirebaseAuth.instance.currentUser;
-      final resolvedRiderName = (freshUser?.displayName?.isNotEmpty ?? false)
-          ? freshUser!.displayName!
-          : (riderName.trim().isEmpty ? "Guest Rider" : riderName);
+      // TIER RESOLUTION: Honor explicit rideType if provided, otherwise ensure we have a valid selection.
+      if (vehicleTiers.isNotEmpty) {
+        if (rideType != 'standard') {
+          selectedTier = vehicleTiers.firstWhere(
+            (t) => t.id.toLowerCase() == rideType.toLowerCase(),
+            orElse: () => selectedTier ?? vehicleTiers.first,
+          );
+        }
+        selectedTier ??= vehicleTiers.first;
+      }
 
+      stage = 'resolving user identity';
+      // 👤 AUTH SYNC: Ensure we use the absolute latest UID from the Auth instance
+      // to prevent "permission-denied" errors during transition from guest to real account.
+      final freshUser = FirebaseAuth.instance.currentUser;
+      final resolvedUserId = freshUser?.uid ?? userId;
+
+      final resolvedRiderName = (freshUser?.displayName?.isNotEmpty == true)
+          ? freshUser!.displayName!
+          : (riderName.trim().isEmpty ? "AeroRide User" : riderName);
+
+      stage = 'calculating trip metrics';
       // Use the selected tier to calculate the precise fare
-      final distance = _distanceMeters(pickup.latitude, pickup.longitude,
-              destination.latitude, destination.longitude) /
-          1000;
-      final rideFare = selectedTier?.estimateFare(distance) ??
-          0.0; // Fallback to 0 if no tier selected
+      final distance = LocationUtils.calculateDistanceKm(pickup, destination);
+      final rideFare = FareCalculator.calculateFare(selectedTier?.id, distance);
 
       final List<String> resolvedCandidateDrivers =
-          candidateDriverIds == null || candidateDriverIds.isEmpty
-              ? <String>[]
-              : List<String>.from(candidateDriverIds);
+          List<String>.from(candidateDriverIds ?? []);
 
+      stage = 'identifying simulation candidates';
       // Use dynamically registered drivers for simulation if none were provided
       if (simulationMode && resolvedCandidateDrivers.isEmpty) {
-        final nearby = await _driversService.getSelectableDrivers(
-          referenceLocation: pickup,
-          limit: 3,
-        );
+        final nearby = await _driversService
+            .getSelectableDrivers(referenceLocation: pickup, limit: 3)
+            .timeout(const Duration(seconds: 5), onTimeout: () => []);
+
         resolvedCandidateDrivers.addAll(
-          nearby.map((d) => (d['driverId'] ?? d['id']).toString()).toList(),
+          nearby
+              .map((d) => (d['driverId'] ?? d['id'] ?? '').toString())
+              .where((id) => id.isNotEmpty)
+              .toList(),
         );
       }
 
+      stage = 'preparing simulation environment';
       // Ensure mock drivers are active in simulation mode to prevent matching stalls
       if (simulationMode && resolvedCandidateDrivers.isNotEmpty) {
         await SimulationService.prepareDriversForSimulation(
@@ -159,26 +182,25 @@ class RideController extends ChangeNotifier {
         }
       }
 
+      stage = 'preparing request data';
       final newRide = RideRequest(
-        userId: freshUser?.uid ?? userId, // Ensure we use the authenticated UID
-        riderName:
-            resolvedRiderName, // 👈 Uses the safe fallback placeholder name
+        userId: resolvedUserId,
+        riderName: resolvedRiderName,
         pickupLocation: pickup.toGeoPoint(),
         destinationLocation: destination.toGeoPoint(),
         pickupAddress: pickupText,
         destinationAddress: dropoffText,
         status: 'searching',
-        estimatedCost: rideFare, // Use the calculated fare
+        estimatedCost: rideFare,
         candidateDrivers: resolvedCandidateDrivers,
-        rideTier: selectedTier?.id
-            .toLowerCase(), // Enforce: tulia, nuru, pamoja, waziri
+        rideTier: selectedTier?.id?.toLowerCase() ?? 'tulia',
       );
 
       stage = 'creating ride request';
       String rideId =
           await _firestoreService.createRideRequestWithWalletReservation(
         rideRequest: newRide,
-        riderId: userId,
+        riderId: resolvedUserId,
         fare: rideFare,
       );
       activeRideId = rideId;
@@ -373,6 +395,14 @@ class RideController extends ChangeNotifier {
           }
         }
 
+        // Notify UI when trip is completed so rider can rate the driver
+        if (prevStatus != 'COMPLETED' && currentRideStatus == 'COMPLETED') {
+          if (onRideCompleted != null && liveRide.driverId != null) {
+            onRideCompleted!(
+                liveRide.driverId!, assignedDriverProfile?.name ?? 'Driver');
+          }
+        }
+
         _updateMarkersAndPolylines();
         _fitCameraToRoute();
         notifyListeners();
@@ -403,25 +433,14 @@ class RideController extends ChangeNotifier {
           // compute ETA and distance
           try {
             if (pickupLocation != null) {
-              final meters = _distanceMeters(
-                driverLocation!.latitude,
-                driverLocation!.longitude,
-                pickupLocation!.latitude,
-                pickupLocation!.longitude,
-              );
-              driverDistanceKm = (meters / 1000.0);
-              // assume average urban speed 500 m/min (~30 km/h)
-              driverEtaMinutes = (meters / 500).ceil();
+              driverDistanceKm = LocationUtils.calculateDistanceKm(
+                  driverLocation!, pickupLocation!);
+              driverEtaMinutes = LocationUtils.calculateETA(driverDistanceKm);
             }
             if (destinationLocation != null && currentRideStatus == 'STARTED') {
-              final meters = _distanceMeters(
-                driverLocation!.latitude,
-                driverLocation!.longitude,
-                destinationLocation!.latitude,
-                destinationLocation!.longitude,
-              );
-              driverDistanceKm = (meters / 1000.0);
-              driverEtaMinutes = (meters / 500).ceil();
+              driverDistanceKm = LocationUtils.calculateDistanceKm(
+                  driverLocation!, destinationLocation!);
+              driverEtaMinutes = LocationUtils.calculateETA(driverDistanceKm);
             }
           } catch (_) {}
 
@@ -443,20 +462,6 @@ class RideController extends ChangeNotifier {
       }
     });
   }
-
-  double _distanceMeters(double lat1, double lng1, double lat2, double lng2) {
-    const earthRadius = 6371000.0;
-    final dLat = _degToRad(lat2 - lat1);
-    final dLng = _degToRad(lng2 - lng1);
-    final a = (sin(dLat / 2) * sin(dLat / 2)) +
-        cos(_degToRad(lat1)) *
-            cos(_degToRad(lat2)) *
-            (sin(dLng / 2) * sin(dLng / 2));
-    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
-    return earthRadius * c;
-  }
-
-  double _degToRad(double degrees) => degrees * (pi / 180);
 
   Future<void> _setupDriverProfile(String driverId) async {
     if (assignedDriverProfile != null &&
@@ -495,10 +500,27 @@ class RideController extends ChangeNotifier {
       notifyListeners();
     } else {
       try {
-        final profile = await _firestoreService.getUserProfile(driverId);
-        assignedDriverProfile = profile;
-        driverVehicle = "Standard Cab • KAA 001A";
-        driverRating = "4.5";
+        // Fetch real data from the user collection
+        final doc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(driverId)
+            .get();
+        if (doc.exists) {
+          final data = doc.data()!;
+          assignedDriverProfile = UserModel(
+            uid: driverId,
+            name: data['name'] ?? 'Driver',
+            email: data['email'] ?? '',
+            role: "driver",
+          );
+
+          final model = data['vehicleModel'] ?? 'Vehicle';
+          final color = data['vehicleColor'] ?? '';
+          final plate = data['plateNumber'] ?? '';
+
+          driverVehicle = "$color $model • $plate".trim();
+          driverRating = (data['rating'] ?? "5.0").toString();
+        }
         notifyListeners();
       } catch (e) {
         debugPrint('RideController: Failed to fetch driver profile: $e');
@@ -912,7 +934,14 @@ class RideController extends ChangeNotifier {
     onDriverArrived = callback;
   }
 
+  void setOnRideCompleted(RideCompletionCallback callback) {
+    onRideCompleted = callback;
+  }
+
   Future<void> loadRideTypes() async {
+    // If already loaded, don't re-seed
+    if (vehicleTiers.isNotEmpty) return;
+
     try {
       // Seed standard tiers (In production, load these from Firestore)
       vehicleTiers = [
@@ -920,8 +949,8 @@ class RideController extends ChangeNotifier {
           id: 'tulia',
           name: 'Tulia',
           description: 'Sustainable, low-profile urban transit.',
-          baseFare: 150.0,
-          perKmRate: 45.0,
+          baseFare: FareCalculator.getRates('tulia')['base']!,
+          perKmRate: FareCalculator.getRates('tulia')['km']!,
           capacity: 4,
           benefits: [
             'Eco-Conscious Carbon Footprint',
@@ -934,8 +963,8 @@ class RideController extends ChangeNotifier {
           id: 'nuru',
           name: 'Nuru',
           description: 'Elevated workspace travel designed for your comfort.',
-          baseFare: 350.0,
-          perKmRate: 80.0,
+          baseFare: FareCalculator.getRates('nuru')['base']!,
+          perKmRate: FareCalculator.getRates('nuru')['km']!,
           capacity: 4,
           benefits: [
             'Curated Premium Audio & Mood Profiles',
@@ -948,8 +977,8 @@ class RideController extends ChangeNotifier {
           id: 'pamoja',
           name: 'Pamoja',
           description: 'Expansive space for your whole collective.',
-          baseFare: 500.0,
-          perKmRate: 110.0,
+          baseFare: FareCalculator.getRates('pamoja')['base']!,
+          perKmRate: FareCalculator.getRates('pamoja')['km']!,
           capacity: 7,
           benefits: [
             'Maximized Legroom & Lounge Seating',
@@ -962,8 +991,8 @@ class RideController extends ChangeNotifier {
           id: 'waziri',
           name: 'Waziri',
           description: 'Elite flagship command. Unmarked, unbothered.',
-          baseFare: 700.0,
-          perKmRate: 150.0,
+          baseFare: FareCalculator.getRates('waziri')['base']!,
+          perKmRate: FareCalculator.getRates('waziri')['km']!,
           capacity: 5,
           benefits: [
             'VIP Full-Grain Leather Lounge',
@@ -973,7 +1002,9 @@ class RideController extends ChangeNotifier {
           iconPath: 'assets/prado.png',
         ),
       ];
-      selectedTier = vehicleTiers.first;
+
+      // 🛡️ Guard: Only set a default if the rider hasn't selected one yet.
+      selectedTier ??= vehicleTiers.first;
 
       try {
         availableRideTypes = await _firestoreService.getRideTypes();
@@ -1006,7 +1037,7 @@ class RideController extends ChangeNotifier {
       // when performing critical ride modifications.
       if (user == null || user.isAnonymous) {
         debugPrint('RideController: Aborting cancel - Real account required.');
-        throw FirebaseAuthException(code: 'not-authenticated');
+        throw NotAuthenticatedException('Please sign in to cancel a ride.');
       }
 
       try {
@@ -1037,6 +1068,25 @@ class RideController extends ChangeNotifier {
       );
     }
     return true;
+  }
+
+  /// Transition the ride from ARRIVED to STARTED.
+  /// This is called when the rider provides the OTP and the trip officially begins.
+  Future<void> startActiveRide() async {
+    if (activeRideId == null) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('rides')
+          .doc(activeRideId)
+          .update({
+        'status': 'started',
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('RideController: Failed to start ride: $e');
+      rethrow;
+    }
   }
 
   void cancelActiveTracking() {

@@ -39,7 +39,17 @@ class FirestoreService {
       return UserModel(uid: uid, name: '', email: '', role: 'rider');
     }
 
-    return UserModel.fromMap(doc.data() as Map<String, dynamic>, doc.id);
+    final data = doc.data() as Map<String, dynamic>;
+
+    // 🛡️ NUMERIC CASTING: Fixes crash when 'wallet: 0' (int) is found instead of double.
+    if (data.containsKey('wallet')) {
+      data['wallet'] = (data['wallet'] as num).toDouble();
+    }
+    if (data.containsKey('rating')) {
+      data['rating'] = (data['rating'] as num).toDouble();
+    }
+
+    return UserModel.fromMap(data, doc.id);
   }
 
   /// Specific initialization for Driver roles to match the state machine architecture.
@@ -62,6 +72,7 @@ class FirestoreService {
     }
 
     // For first-time signup or conversion, ensure these explicit keys are set.
+    // 🛡️ DATA SYNC: Standardized on 'vehicleTier' to match the rest of the app.
     await docRef.set({
       'uid': uid,
       'name': name ?? (existingData?['name'] as String? ?? ''),
@@ -70,6 +81,8 @@ class FirestoreService {
           phoneNumber ?? (existingData?['phoneNumber'] as String? ?? ''),
       'vehicleType':
           vehicleType ?? (existingData?['vehicleType'] as String? ?? 'tulia'),
+      'vehicleTier':
+          vehicleType ?? (existingData?['vehicleTier'] as String? ?? 'tulia'),
       'vehicleModel':
           vehicleModel ?? (existingData?['vehicleModel'] as String? ?? ''),
       'licenseNumber':
@@ -350,6 +363,7 @@ class FirestoreService {
     required String riderId,
     required String driverId,
     required double fare,
+    double driverShare = 0.8, // 80% to driver, 20% to platform
   }) async {
     await _db.runTransaction((tx) async {
       final rideRef = _db.collection('rides').doc(rideId);
