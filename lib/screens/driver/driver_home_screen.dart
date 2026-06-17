@@ -1,0 +1,1749 @@
+import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:geolocator/geolocator.dart';
+import 'dart:async';
+import '../history_screen.dart';
+import '../profile_screen.dart';
+import '../chat_screen.dart';
+import '../landing_screen.dart';
+
+
+import '../../services/user_service.dart';
+import '../../services/ride_service.dart';
+
+class DriverHomeScreen extends StatefulWidget {
+  const DriverHomeScreen({super.key});
+
+  @override
+  State<DriverHomeScreen> createState() => _DriverHomeScreenState();
+}
+
+class _DriverHomeScreenState extends State<DriverHomeScreen> {
+  bool isOnline = false;
+  Timer? locationTimer;
+
+  final UserService userService = UserService();
+  final FirebaseFirestore firestore = FirebaseFirestore.instance;
+  final RideService rideService = RideService();
+
+  final TextEditingController sosMessageController = TextEditingController();
+  final TextEditingController driverCancelController = TextEditingController();
+
+  @override
+  void dispose() {
+    locationTimer?.cancel();
+    sosMessageController.dispose();
+    driverCancelController.dispose();
+    super.dispose();
+  }
+
+  
+  Future<void> toggleDriverStatus() async {
+    setState(() {
+      isOnline = !isOnline;
+    });
+
+    if (isOnline) {
+      await updateLocation();
+      locationTimer = Timer.periodic(
+        const Duration(seconds: 5),
+        (timer) async {
+          await updateLocation();
+        },
+      );
+    } else {
+      locationTimer?.cancel();
+    }
+
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser != null) {
+      await userService.updateDriverStatus(
+        uid: currentUser.uid,
+        isOnline: isOnline,
+      );
+    }
+  }
+
+  Future<void> updateLocation() async {
+    bool serviceEnabled;
+    LocationPermission permission;
+
+    serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return;
+
+    permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) return;
+    }
+
+    Position position = await Geolocator.getCurrentPosition();
+    final currentUser = FirebaseAuth.instance.currentUser;
+
+    if (currentUser != null) {
+      await userService.updateDriverLocation(
+        uid: currentUser.uid,
+        latitude: position.latitude,
+        longitude: position.longitude,
+      );
+      
+      final activeRides = await firestore
+          .collection('rides')
+          .where('driverId', isEqualTo: currentUser.uid)
+          .where('status', whereIn: ['accepted', 'started'])
+          .get();
+
+      for (var ride in activeRides.docs) {
+        await firestore.collection('rides').doc(ride.id).update({
+          'driverLatitude': position.latitude,
+          'driverLongitude': position.longitude,
+        });
+      }
+    }
+  }
+
+  Future<void> _handleLogout(BuildContext context) async {
+  // 1. Display the Confirmation Alert Dialog first
+  final bool? shouldLogout = await showDialog<bool>(
+    context: context,
+    builder: (BuildContext context) {
+      return AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.logout_rounded, color: Colors.redAccent),
+            SizedBox(width: 8),
+            Text("Confirm Log Out"),
+          ],
+        ),
+        content: const Text("Are you sure you want to log out of your session?"),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        actions: [
+          // Cancel Button
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false), // Returns false
+            child: Text(
+              "Cancel", 
+              style: TextStyle(color: Colors.grey.shade600, fontWeight: FontWeight.w600)
+            ),
+          ),
+          // OK Button
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true), // Returns true
+            child: const Text(
+              "OK", 
+              style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)
+            ),
+          ),
+        ],
+      );
+    },
+  );
+
+  // 2. If the user clicked Cancel (or dismissed the dialog), stop right here
+  if (shouldLogout != true) return;
+
+  // 3. If they clicked OK, proceed with the secure logout workflow
+  if (!context.mounted) return;
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (context) => const Center(
+      child: CircularProgressIndicator(color: Colors.blue),
+    ),
+  );
+
+  try {
+    // Sign out from Firebase Cloud
+    await FirebaseAuth.instance.signOut();
+
+    if (!context.mounted) return;
+    Navigator.pop(context); // Dismiss loading spinner
+
+    // Clear navigation stack tracking and return to landing page entry point
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (context) => const LandingScreen()),
+      (route) => false,
+    );
+  } catch (e) {
+    if (context.mounted) Navigator.pop(context); // Dismiss loading spinner on error
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Error logging out: ${e.toString()}"),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+}
+
+  /// Handles the logout functionality for the driver
+  /*Future<void> _handleLogout(BuildContext context) async {
+  // Show a quick loading dialog so the user knows it's processing
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (context) => const Center(
+      child: CircularProgressIndicator(color: Colors.blue),
+    ),
+  );
+
+  try {
+    // 1. Sign out from Firebase Cloud Auth
+    await FirebaseAuth.instance.signOut();
+
+    if (!context.mounted) return;
+
+    // 2. Pop the loading dialog safely
+    Navigator.pop(context);
+
+    // 3. Clear navigation stack and route directly back to the LandingScreen
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (context) => const LandingScreen()),
+      (route) => false, // This condition destroys all previous dashboard history screens
+    );
+  } catch (e) {
+    if (context.mounted) Navigator.pop(context); // Pop loading dialog if it fails
+    
+    // Alert the user if a cloud connection error happens
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text("Error logging out: ${e.toString()}"),
+        backgroundColor: Colors.red,
+      ),
+    );
+  }
+}*/
+
+
+  @override
+  Widget build(BuildContext context) {
+    final currentDriverId = FirebaseAuth.instance.currentUser?.uid;
+
+    return Scaffold(
+      backgroundColor: Colors.grey.shade50,
+      appBar: AppBar(
+        title:  Text(MediaQuery.of(context).size.width < 500 ? "Driver" : "Driver Dashboard", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+        elevation: 0,
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.grey.shade900,
+        actions: [
+          IconButton(
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen())),
+            icon: const Icon(Icons.history_rounded),
+            tooltip: "Ride History",
+          ),
+          IconButton(
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen())),
+            icon: const Icon(Icons.person_outline_rounded),
+            tooltip: "Account Profile",
+          ),
+    Padding(
+      padding: const EdgeInsets.only(right: 6.0),
+      child: IconButton(
+        onPressed: () => _handleLogout(context), // Triggers the sign-out method
+        icon: const Icon(Icons.logout_rounded, color: Colors.redAccent, size: 22),
+        tooltip: "Log Out",
+      ),
+    ),
+          //const SizedBox(width: 8),
+        ],
+      ),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 1000), // Formats interface elegantly on desktop layout views
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // System Availability & Status Header Row
+                Card(
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(color: Colors.grey.shade200),
+                  ),
+                  color: Colors.white,
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        
+                        Row(
+                          children: [
+                            Container(
+                              width: 14,
+                              height: 14,
+                              decoration: BoxDecoration(
+                                color: isOnline ? Colors.green : Colors.grey.shade400,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              isOnline ? "Active & Online" : "Currently Offline",
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.grey.shade900,
+                              ),
+                            ),
+                          ],
+                        ),
+                        
+                        Row(
+                          children: [
+                            // Emergency SOS Trigger UI Element
+                            ElevatedButton.icon(
+                              onPressed: () => _showEmergencyDialog(context),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.red.shade50,
+                                foregroundColor: Colors.red.shade700,
+                                elevation: 0,
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                              icon: const Icon(Icons.gpp_bad_rounded, size: 20),
+                              label: const Text("SOS Alert", style: TextStyle(fontWeight: FontWeight.bold)),
+                            ),
+                            const SizedBox(width: 12),
+                            ElevatedButton(
+                              onPressed: toggleDriverStatus,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: isOnline ? Colors.grey.shade900 : Colors.blue.shade600,
+                                foregroundColor: Colors.white,
+                                elevation: 0,
+                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                              child: Text(
+                                isOnline ? "Go Offline" : "Go Online",
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // Responsive Grid for General Fleet Statistics
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    int crossAxisCount = constraints.maxWidth > 650 ? 2 : 1;
+                    return GridView(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: crossAxisCount,
+                        crossAxisSpacing: 16,
+                        mainAxisSpacing: 16,
+                        childAspectRatio: 2.2,
+                      ),
+                      children: [
+                        // Card Panel Left: Personal Earnings Pipeline Metrics
+                        StreamBuilder<DocumentSnapshot>(
+                          stream: firestore.collection('users').doc(currentDriverId).snapshots(),
+                          builder: (context, snapshot) {
+                            if (!snapshot.hasData) return const Center(child: LinearProgressIndicator());
+                            final data = snapshot.data?.data() as Map<String, dynamic>? ?? {};
+                            
+                            return _buildMetricTile(
+                              title: "Your Balance",
+                              value: "KES ${data['earnings'] ?? 0}",
+                              subtitle: "Driver rating: ${(data['rating'] ?? 0.0).toStringAsFixed(1)} ⭐ (${data['totalRatings'] ?? 0} reviews)",
+                              backgroundColor: Colors.blue.shade50.withOpacity(0.5),
+                              accentColor: Colors.blue.shade700,
+                              icon: Icons.account_balance_wallet_outlined,
+                            );
+                          },
+                        ),
+
+                        // Card Panel Right: Global Network Context Telemetry View
+                        StreamBuilder<QuerySnapshot>(
+                          stream: firestore.collection('users').where('isOnline', isEqualTo: true).snapshots(),
+                          builder: (context, driverSnapshot) {
+                            return StreamBuilder<QuerySnapshot>(
+                              stream: firestore.collection('rides').snapshots(),
+                              builder: (context, rideSnapshot) {
+                                int onlineDrivers = driverSnapshot.data?.docs.length ?? 0;
+                                int pendingRides = 0;
+                                int ongoingRides = 0;
+
+                                if (rideSnapshot.hasData) {
+                                  for (var ride in rideSnapshot.data!.docs) {
+                                    final data = ride.data() as Map<String, dynamic>;
+                                    if (data['status'] == 'pending') pendingRides++;
+                                    if (data['status'] == 'accepted' || data['status'] == 'started') ongoingRides++;
+                                  }
+                                }
+
+                                return _buildMetricTile(
+                                  title: "AeroRide Telemetry Status",
+                                  value: "$onlineDrivers Active Drivers",
+                                  subtitle: "$pendingRides rides awaiting dispatch • $ongoingRides running trips",
+                                  backgroundColor: Colors.green.shade50.withOpacity(0.5),
+                                  accentColor: Colors.green.shade700,
+                                  icon: Icons.language_rounded,
+                                );
+                              },
+                            );
+                          },
+                        ),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 36),
+
+                // Request Header Label Section
+                Row(
+                  children: [
+                    Icon(Icons.local_taxi_rounded, color: Colors.grey.shade700),
+                    const SizedBox(width: 8),
+                    Text(
+                      "Pending Ride Requests",
+                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.grey.shade800),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                // Core Modular Request Flow Streaming Pipeline Builder
+                StreamBuilder<QuerySnapshot>(
+                  stream: firestore.collection('rides').snapshots(),
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData) {
+                      return const Center(child: Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator()));
+                    }
+
+                    final rides = snapshot.data!.docs.where((ride) {
+                      final data = ride.data() as Map<String, dynamic>;
+                      if (data['status'] == 'pending') return true;
+                      if ((data['status'] == 'accepted' || data['status'] == 'started') && data['driverId'] == currentDriverId) {
+                        return true;
+                      }
+                      return false;
+                    }).toList();
+
+                    if (rides.isEmpty) {
+                      return Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(48),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.grey.shade200),
+                        ),
+                        child: Column(
+                          children: [
+                            Icon(Icons.layers_clear_outlined, size: 48, color: Colors.grey.shade300),
+                            const SizedBox(height: 12),
+                            Text("No Ride Requests Available", style: TextStyle(color: Colors.grey.shade500, fontSize: 16, fontWeight: FontWeight.w500)),
+                          ],
+                        ),
+                      );
+                    }
+
+                    return ListView.separated(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: rides.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 12),
+                      itemBuilder: (context, index) {
+                        final ride = rides[index];
+                        final data = ride.data() as Map<String, dynamic>;
+                        
+                        return Card(
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                            side: BorderSide(color: Colors.grey.shade200),
+                          ),
+                          color: Colors.white,
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                      decoration: BoxDecoration(
+                                        color: _getStatusColor(data['status']).withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(30),
+                                      ),
+                                      child: Text(
+                                        data['status'].toString().toUpperCase(),
+                                        style: TextStyle(color: _getStatusColor(data['status']), fontWeight: FontWeight.bold, fontSize: 12),
+                                      ),
+                                    ),
+                                    Text(
+                                      "Fare: KES ${data['fare']}",
+                                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                                _buildLocationLine(Icons.radio_button_checked_rounded, Colors.blue, "Pickup Location", data['pickup']),
+                                const Padding(
+                                  padding: const EdgeInsets.only(left: 11),
+                                  child: SizedBox(height: 14, child: VerticalDivider(thickness: 2, width: 2)),
+                                ),
+                                _buildLocationLine(Icons.location_on_rounded, Colors.orange, "Destination Dropoff", data['destination']),
+                                const SizedBox(height: 20),
+                                
+                                // Modular Action Controller View Strip
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: ElevatedButton(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.blue.shade600,
+                                          foregroundColor: Colors.white,
+                                          elevation: 0,
+                                          padding: const EdgeInsets.symmetric(vertical: 14),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                        ),
+                                        onPressed: () async {
+                                          if (data['status'] == 'pending') {
+                                            await rideService.acceptRide(rideId: ride.id);
+                                          } else if (data['status'] == 'accepted') {
+                                            await rideService.startRide(rideId: ride.id);
+                                          } else if (data['status'] == 'started') {
+                                            await rideService.completeRide(rideId: ride.id);
+                                          }
+                                          if (!context.mounted) return;
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(content: Text("Ride track context updated successfully.")),
+                                          );
+                                        },
+                                        child: Text(
+                                          data['status'] == 'pending' ? 'Accept Request' : data['status'] == 'accepted' ? 'Start Trip' : 'Complete Trip',
+                                          style: const TextStyle(fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
+                                    ),
+                                    if (data['status'] != 'completed') ...[
+                                      const SizedBox(width: 8),
+                                      IconButton(
+                                        style: IconButton.styleFrom(
+                                          backgroundColor: Colors.grey.shade100,
+                                          foregroundColor: Colors.grey.shade700,
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                          padding: const EdgeInsets.all(14),
+                                        ),
+                                        onPressed: () {
+                                          Navigator.push(context, MaterialPageRoute(builder: (_) => ChatScreen(rideId: ride.id)));
+                                        },
+                                        icon: const Icon(Icons.chat_bubble_outline_rounded, size: 20),
+                                        tooltip: "Message Rider",
+                                      ),
+                                      const SizedBox(width: 8),
+                                      IconButton(
+                                        style: IconButton.styleFrom(
+                                          backgroundColor: Colors.red.shade50,
+                                          foregroundColor: Colors.red.shade600,
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                          padding: const EdgeInsets.all(14),
+                                        ),
+                                        onPressed: () => _showCancelDialog(context, ride.id),
+                                        icon: const Icon(Icons.close_rounded, size: 20),
+                                        tooltip: "Cancel Dispatch",
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Visual Utility View Layout Blocks
+  Widget _buildMetricTile({
+    required String title,
+    required String value,
+    required String subtitle,
+    required Color backgroundColor,
+    required Color accentColor,
+    required IconData icon,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: backgroundColor, borderRadius: BorderRadius.circular(12)),
+            child: Icon(icon, color: accentColor, size: 28),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(title, style: TextStyle(fontSize: 13, color: Colors.grey.shade500, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                Text(value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.grey.shade900)),
+                const SizedBox(height: 4),
+                Text(subtitle, style: TextStyle(fontSize: 12, color: Colors.grey.shade600), maxLines: 1, overflow: TextOverflow.ellipsis),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLocationLine(IconData icon, Color color, String prefix, String dynamicText) {
+    return Row(
+      children: [
+        Icon(icon, size: 24, color: color),
+        const SizedBox(width: 12),
+        Expanded(
+          child: RichText(
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            text: TextSpan(
+              style: const TextStyle(fontSize: 14, color: Colors.black87),
+              children: [
+                TextSpan(text: "$prefix: ", style: const TextStyle(fontWeight: FontWeight.bold)),
+                TextSpan(text: dynamicText),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Color _getStatusColor(String? status) {
+    switch (status) {
+      case 'pending': return Colors.orange.shade700;
+      case 'accepted': return Colors.blue.shade700;
+      case 'started': return Colors.purple.shade700;
+      case 'completed': return Colors.green.shade700;
+      default: return Colors.grey.shade700;
+    }
+  }
+
+  // Context Dialogue Handlers
+  void _showEmergencyDialog(BuildContext context) {
+    final TextEditingController localSosController = TextEditingController();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.gpp_bad_rounded, color: Colors.red),
+            SizedBox(width: 8),
+            Text("Emergency SOS Details", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text("Describe your emergency configuration context below for immediate admin review:"),
+            const SizedBox(height: 16),
+            TextField(
+              controller: localSosController,
+              maxLines: 3,
+              style: const TextStyle(color: Colors.black),
+              decoration: InputDecoration(
+                hintText: "State danger situation elements...",
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () async {
+              String msg = localSosController.text.trim().isEmpty ? "No explicit driver text context notes." : localSosController.text.trim();
+              await firestore.collection('emergencies').add({
+                'type': 'SOS',
+                'userRole': 'driver',
+                'message': msg,
+                'createdAt': Timestamp.now(),
+                'status': 'active',
+              });
+              if (!context.mounted) return;
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(backgroundColor: Colors.red, content: Text("🚨 SOS Dispatched!")));
+            },
+            child: const Text("Send Alert", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showCancelDialog(BuildContext context, String rideId) {
+    final TextEditingController localCancelController = TextEditingController();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text("Cancel Ride Confirmation", style: TextStyle(fontWeight: FontWeight.bold)),
+        content: TextField(
+          controller: localCancelController,
+          decoration: const InputDecoration(hintText: "Enter reason for drop context..."),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Go Back")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () async {
+              String reason = localCancelController.text.trim().isEmpty ? "Driver cancelled trip request." : localCancelController.text.trim();
+              await rideService.cancelRide(
+                rideId: rideId,
+                cancelledBy: FirebaseAuth.instance.currentUser?.email ?? 'Unknown Driver',
+                reason: reason,
+              );
+              if (!context.mounted) return;
+              Navigator.pop(context);
+            },
+            child: const Text("Confirm Cancel", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+/*import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:geolocator/geolocator.dart';
+import 'dart:async';
+import '../history_screen.dart';
+import '../profile_screen.dart';
+import '../chat_screen.dart';
+
+import '../../services/user_service.dart';
+import '../../services/ride_service.dart';
+
+class DriverHomeScreen extends StatefulWidget {
+  const DriverHomeScreen({super.key});
+
+  @override
+  State<DriverHomeScreen> createState() =>
+      _DriverHomeScreenState();
+}
+
+class _DriverHomeScreenState
+    extends State<DriverHomeScreen> {
+
+  bool isOnline = false;
+  Timer? locationTimer;
+
+  final UserService userService =
+      UserService();
+
+  final FirebaseFirestore firestore =
+      FirebaseFirestore.instance;
+
+  final RideService rideService =
+      RideService();
+
+  final TextEditingController sosMessageController = TextEditingController();
+  final TextEditingController driverCancelController = TextEditingController();
+
+
+  Future<void> toggleDriverStatus() async {
+
+    setState(() {
+  isOnline = !isOnline;
+});
+
+if (isOnline) {
+
+  await updateLocation();
+
+  locationTimer = Timer.periodic(
+
+    const Duration(seconds: 5),
+
+    (timer) async {
+
+      await updateLocation();
+    },
+  );
+
+} else {
+
+  locationTimer?.cancel();
+}
+
+    final currentUser =
+        FirebaseAuth.instance.currentUser;
+
+    if (currentUser != null) {
+
+      await userService.updateDriverStatus(
+        uid: currentUser.uid,
+        isOnline: isOnline,
+      );
+    }
+  }
+  
+  Future<void> updateLocation() async {
+
+  bool serviceEnabled;
+  LocationPermission permission;
+
+  serviceEnabled =
+      await Geolocator
+          .isLocationServiceEnabled();
+
+  if (!serviceEnabled) {
+    return;
+  }
+
+  permission =
+      await Geolocator.checkPermission();
+
+  if (permission ==
+      LocationPermission.denied) {
+
+    permission =
+        await Geolocator.requestPermission();
+
+    if (permission ==
+        LocationPermission.denied) {
+      return;
+    }
+  }
+
+  Position position =
+      await Geolocator
+          .getCurrentPosition();
+
+  final currentUser =
+      FirebaseAuth.instance.currentUser;
+
+  if (currentUser != null) {
+
+    await userService.updateDriverLocation(
+      uid: currentUser.uid,
+      latitude: position.latitude,
+      longitude: position.longitude,
+    );
+    final activeRides =
+    await firestore
+        .collection('rides')
+        .where(
+          'driverId',
+          isEqualTo:
+              FirebaseAuth
+                  .instance
+                  .currentUser
+                  ?.uid,
+        )
+        .where(
+          'status',
+          whereIn: [
+            'accepted',
+            'started',
+          ],
+        )
+        .get();
+
+for (var ride in activeRides.docs) {
+
+  await firestore
+      .collection('rides')
+      .doc(ride.id)
+      .update({
+
+    'driverLatitude':
+        position.latitude,
+
+    'driverLongitude':
+        position.longitude,
+  });
+}
+  }
+}
+
+  @override
+  Widget build(BuildContext context) {
+
+    return Scaffold(
+
+      appBar: AppBar(
+        title: const Text(
+          "Driver Dashboard",
+        ),
+        centerTitle: true,
+        actions: [
+
+  IconButton(
+
+    onPressed: () {
+
+      Navigator.push(
+
+        context,
+
+        MaterialPageRoute(
+
+          builder: (_) =>
+              const HistoryScreen(),
+        ),
+      );
+    },
+
+    icon: const Icon(
+      Icons.history,
+    ),
+  ),
+  IconButton(
+
+  onPressed: () {
+
+    Navigator.push(
+
+      context,
+
+      MaterialPageRoute(
+
+        builder: (_) =>
+            const ProfileScreen(),
+      ),
+    );
+  },
+
+  icon: const Icon(
+    Icons.person,
+  ),
+),
+],
+      ),
+
+      body: SingleChildScrollView(
+
+        child: Center(
+
+        child: Column(
+
+          mainAxisAlignment:
+              MainAxisAlignment.start,
+
+          children: [
+
+            const SizedBox(height: 20),
+
+            Text(
+
+              isOnline
+                  ? "You are ONLINE"
+                  : "You are OFFLINE",
+
+              style: const TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            SizedBox(
+  width: double.infinity,
+  height: 50,
+  child: ElevatedButton.icon(
+    onPressed: () {
+      // Create a local controller to capture the danger message input
+      final TextEditingController sosMessageController = TextEditingController();
+
+      showDialog(
+        context: context,
+        barrierDismissible: false, // User must choose an action to close it
+        builder: (context) {
+          return AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.gpp_bad, color: Colors.red),
+                SizedBox(width: 8),
+                Text("Emergency SOS Details", style: TextStyle(color: Colors.red)),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  "Please quickly describe your emergency situation or danger context below:",
+                  style: TextStyle(fontSize: 14),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: sosMessageController,
+                  maxLines: 3,
+                  autofocus: true,
+                  style: const TextStyle(color: Colors.black),
+                  decoration: InputDecoration(
+                    hintText: "e.g., Driver is speeding / I am being threatened / Car breakdown in unsafe area...",
+                    hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 13),
+                    border: const OutlineInputBorder(),
+                    focusedBorder: const OutlineInputBorder(
+                      borderSide: BorderSide(color: Colors.red, width: 2),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                onPressed: () async {
+                  String emergencyNote = sosMessageController.text.trim();
+                  
+                  if (emergencyNote.isEmpty) {
+                    emergencyNote = "No text message details provided by user.";
+                  }
+
+                  // Write data directly to firestore emergencies collection
+                  await FirebaseFirestore.instance.collection('emergencies').add({
+                    'type': 'SOS',
+                    'userRole': 'driver', // Or change dynamically if used on driver side
+                    'message': emergencyNote, // <-- THE NEW FIELD
+                    'createdAt': Timestamp.now(),
+                    'status': 'active',
+                  });
+
+                  Navigator.pop(context); // Close the dialog box
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      backgroundColor: Colors.red,
+                      content: Text("🚨 Emergency SOS Sent to Admin!"),
+                    ),
+                  );
+                },
+                child: const Text("Send Alert", style: TextStyle(color: Colors.white)),
+              ),
+            ],
+          );
+        },
+      );
+    },
+    style: ElevatedButton.styleFrom(
+      backgroundColor: Colors.red,
+    ),
+    icon: const Icon(Icons.warning, color: Colors.white),
+    label: const Text("Emergency SOS", style: TextStyle(color: Colors.white)),
+  ),
+),
+           
+            StreamBuilder<DocumentSnapshot>(
+
+  stream: firestore
+      .collection('users')
+      .doc(
+        FirebaseAuth
+            .instance
+            .currentUser
+            ?.uid,
+      )
+      .snapshots(),
+
+  builder: (context, snapshot) {
+
+    if (!snapshot.hasData) {
+      return const SizedBox();
+    }
+
+    final data =
+        snapshot.data!.data()
+            as Map<String, dynamic>;
+
+    return Text(
+
+      "Earnings: KES "
+      "${data['earnings'] ?? 0}",
+
+      style: const TextStyle(
+        fontSize: 22,
+        fontWeight:
+            FontWeight.bold,
+        color: Colors.green,
+      ),
+    );
+  },
+),
+
+            const SizedBox(height: 20),
+
+            ElevatedButton(
+
+              onPressed:
+                  toggleDriverStatus,
+
+              child: Text(
+
+                isOnline
+                    ? "Go Offline"
+                    : "Go Online",
+              ),
+            ),
+            StreamBuilder<QuerySnapshot>(
+
+  stream: firestore
+      .collection('rides')
+      .where(
+        'driverId',
+        isEqualTo:
+            FirebaseAuth
+                .instance
+                .currentUser
+                ?.uid,
+      )
+      .snapshots(),
+
+  builder: (context, snapshot) {
+
+    if (!snapshot.hasData) {
+      return const SizedBox();
+    }
+
+    final rides =
+        snapshot.data!.docs;
+
+    double totalEarnings = 0;
+
+    int completedTrips = 0;
+
+    int activeTrips = 0;
+
+    for (var ride in rides) {
+
+      final data =
+          ride.data()
+              as Map<String, dynamic>;
+
+      if (data['fare'] != null) {
+
+        totalEarnings +=
+            (data['fare'] as num)
+                .toDouble();
+      }
+
+      if (data['status'] ==
+          'completed') {
+
+        completedTrips++;
+      }
+
+      if (data['status'] ==
+              'accepted' ||
+
+          data['status'] ==
+              'started') {
+
+        activeTrips++;
+      }
+    }
+
+    return Container(
+
+      margin:
+          const EdgeInsets.all(10),
+
+      padding:
+          const EdgeInsets.all(15),
+
+      decoration: BoxDecoration(
+
+        color: Colors.blue.shade50,
+
+        borderRadius:
+            BorderRadius.circular(12),
+      ),
+
+      child: Column(
+
+        children: [
+
+          Text(
+
+            "Total Earnings: "
+            "KES ${totalEarnings.toStringAsFixed(0)}",
+
+            style: const TextStyle(
+
+              fontSize: 20,
+              fontWeight:
+                  FontWeight.bold,
+            ),
+          ),
+
+          const SizedBox(height: 10),
+
+          Text(
+
+            "Completed Trips: "
+            "$completedTrips",
+
+            style: const TextStyle(
+              fontSize: 18,
+            ),
+          ),
+
+          const SizedBox(height: 10),
+
+          Text(
+
+            "Active Trips: "
+            "$activeTrips",
+
+            style: const TextStyle(
+              fontSize: 18,
+            ),
+          ),
+          const SizedBox(height: 10),
+
+FutureBuilder<DocumentSnapshot>(
+
+  future: firestore
+      .collection('users')
+      .doc(
+        FirebaseAuth
+            .instance
+            .currentUser
+            ?.uid,
+      )
+      .get(),
+
+  builder: (context, snapshot) {
+
+    if (!snapshot.hasData) {
+
+      return const SizedBox();
+    }
+
+    final data =
+        snapshot.data!.data()
+            as Map<String, dynamic>;
+
+    double rating =
+        (data['rating'] ?? 0)
+            .toDouble();
+
+    int totalRatings =
+        data['totalRatings'] ?? 0;
+
+    return Column(
+
+      children: [
+
+        Text(
+
+          "Driver Rating: "
+          "${rating.toStringAsFixed(1)} ⭐",
+
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight:
+                FontWeight.bold,
+          ),
+        ),
+
+        const SizedBox(height: 8),
+
+        Text(
+
+          "Total Ratings: "
+          "$totalRatings",
+
+          style: const TextStyle(
+            fontSize: 16,
+          ),
+        ),
+      ],
+    );
+  },
+),
+        ],
+      ),
+    );
+  },
+),
+StreamBuilder<QuerySnapshot>(
+
+  stream: firestore
+      .collection('users')
+      .where(
+        'isOnline',
+        isEqualTo: true,
+      )
+      .snapshots(),
+
+  builder: (context, driverSnapshot) {
+
+    return StreamBuilder<QuerySnapshot>(
+
+      stream: firestore
+          .collection('rides')
+          .snapshots(),
+
+      builder: (context, rideSnapshot) {
+
+        if (!driverSnapshot.hasData ||
+            !rideSnapshot.hasData) {
+
+          return const SizedBox();
+        }
+
+        int onlineDrivers =
+            driverSnapshot
+                .data!
+                .docs
+                .length;
+
+        int pendingRides = 0;
+
+        int ongoingRides = 0;
+
+        for (var ride
+            in rideSnapshot.data!.docs) {
+
+          final data =
+              ride.data()
+                  as Map<String, dynamic>;
+
+          if (data['status'] ==
+              'pending') {
+
+            pendingRides++;
+          }
+
+          if (data['status'] ==
+                  'accepted' ||
+
+              data['status'] ==
+                  'started') {
+
+            ongoingRides++;
+          }
+        }
+
+        return Container(
+
+          margin:
+              const EdgeInsets.symmetric(
+            horizontal: 10,
+          ),
+
+          padding:
+              const EdgeInsets.all(15),
+
+          decoration: BoxDecoration(
+
+            color:
+                Colors.green.shade50,
+
+            borderRadius:
+                BorderRadius.circular(12),
+          ),
+
+          child: Column(
+
+            children: [
+
+              Text(
+
+                "Drivers Online: "
+                "$onlineDrivers",
+
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight:
+                      FontWeight.bold,
+                ),
+              ),
+
+              const SizedBox(height: 10),
+
+              Text(
+
+                "Pending Rides: "
+                "$pendingRides",
+
+                style: const TextStyle(
+                  fontSize: 18,
+                ),
+              ),
+
+              const SizedBox(height: 10),
+
+              Text(
+
+                "Ongoing Trips: "
+                "$ongoingRides",
+
+                style: const TextStyle(
+                  fontSize: 18,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  },
+),
+
+            const SizedBox(height: 40),
+
+            const Text(
+
+              "Pending Ride Requests",
+
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight:
+                    FontWeight.bold,
+              ),
+            ),
+
+            const SizedBox(height: 20),
+
+SizedBox(
+
+  height: 500,
+
+  child: StreamBuilder(
+
+    stream: firestore
+        .collection('rides')
+        .snapshots(),
+
+    builder:
+        (context, snapshot) {
+      
+
+      if (!snapshot.hasData) {
+
+        return const Center(
+          child:
+              CircularProgressIndicator(),
+        );
+      }
+
+                  final currentDriverId =
+    FirebaseAuth
+        .instance
+        .currentUser
+        ?.uid;
+
+final rides =
+    snapshot.data!.docs.where((ride) {
+
+  final data =
+      ride.data()
+          as Map<String, dynamic>;
+  
+
+  // Show pending rides to everyone
+  if (data['status'] == 'pending') {
+    return true;
+  }
+
+  // Show accepted/started rides
+  // ONLY to assigned driver
+  if ((data['status'] == 'accepted' ||
+          data['status'] == 'started') &&
+
+      data['driverId'] ==
+          currentDriverId) {
+
+    return true;
+  }
+
+  return false;
+
+}).toList();
+
+                  if (rides.isEmpty) {
+
+                    return const Center(
+
+                      child: Text(
+                        "No Ride Requests Yet",
+                      ),
+                    );
+                  }
+
+                  return ListView.builder(
+
+                    itemCount:
+                        rides.length,
+
+                    itemBuilder:
+                        (context, index) {
+
+                      final ride =
+                          rides[index];
+
+                      return Card(
+
+  child: ListTile(
+
+    leading: const Icon(
+      Icons.local_taxi,
+    ),
+
+    title: Text(
+      ride['pickup'],
+    ),
+
+
+    subtitle: Column(
+
+  crossAxisAlignment:
+      CrossAxisAlignment.start,
+
+  children: [
+
+    Text(
+      "Destination: ${ride['destination']}",
+    ),
+
+    Text(
+      "Status: ${ride['status']}",
+    ),
+
+    Text(
+      "Fare: KES ${ride['fare']}",
+    ),
+
+    const SizedBox(height: 10),
+
+    Row(
+
+      children: [
+
+        Expanded(
+
+          child: ElevatedButton(
+
+            onPressed: () async {
+
+              if (ride['status'] == 'pending') {
+
+                await rideService.acceptRide(
+                  rideId: ride.id,
+                );
+
+              } else if (
+                  ride['status'] == 'accepted') {
+
+                await rideService.startRide(
+                  rideId: ride.id,
+                );
+
+              } else if (
+                  ride['status'] == 'started') {
+
+                await rideService.completeRide(
+                  rideId: ride.id,
+                );
+              }
+
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(
+
+                const SnackBar(
+
+                  content: Text(
+                    "Ride status updated",
+                  ),
+                ),
+              );
+            },
+
+            child: Text(
+
+              ride['status'] == 'pending'
+                  ? 'Accept'
+                  : ride['status'] == 'accepted'
+                      ? 'Start'
+                      : 'Complete',
+            ),
+          ),
+        ),
+
+         const SizedBox(width: 8),
+if (ride['status'] != 'completed')
+  Expanded(
+    child: ElevatedButton(
+      onPressed: () {
+        // Create a local controller to capture the driver's cancellation reason input
+        final TextEditingController driverCancelController = TextEditingController();
+
+        showDialog(
+          context: context,
+          barrierDismissible: false, // Force driver to choose an action
+          builder: (context) {
+            return AlertDialog(
+              title: const Row(
+                children: [
+                  Icon(Icons.cancel, color: Colors.red),
+                  SizedBox(width: 8),
+                  Text("Cancel Ride (Driver)"),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    "Please state your reason for cancelling this trip:",
+                    style: TextStyle(fontSize: 14),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: driverCancelController,
+                    maxLines: 2,
+                    autofocus: true,
+                    style: const TextStyle(color: Colors.black),
+                    decoration: InputDecoration(
+                      hintText: "e.g., Heavy traffic, flat tire, rider not responding, location unreachable...",
+                      hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 13),
+                      border: const OutlineInputBorder(),
+                      focusedBorder: const OutlineInputBorder(
+                        borderSide: BorderSide(color: Colors.red, width: 2),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Go Back", style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                  onPressed: () async {
+                    String driverReason = driverCancelController.text.trim();
+                    
+                    // Fallback string if the field is submitted empty
+                    if (driverReason.isEmpty) {
+                      driverReason = "Driver cancelled without details.";
+                    }
+
+                    // Execute cancellation function using the driver's context variables
+                    await rideService.cancelRide(
+                      rideId: ride.id,
+                      cancelledBy: FirebaseAuth.instance.currentUser?.email ?? 'Unknown Driver', // Set to driver
+                      reason: driverReason, // Pass custom input string
+                    );
+
+                    Navigator.pop(context); // Dismiss the alert popup dialog box
+
+                    ScaffoldMessenger.of(context).showSnackBar(
+                       SnackBar(
+                        backgroundColor: Colors.red,
+                        content: Text("Ride Cancelled.\n"
+                         "Reason: ${driverReason}"),
+                      ),
+                    );
+                  },
+                  child: const Text("Confirm Cancel", style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.red,
+      ),
+      child: const Text(
+        "Cancel",
+        style: TextStyle(color: Colors.white),
+      ),
+    ),
+  ),
+        
+      ],
+    ),
+
+    const SizedBox(height: 8),
+
+    SizedBox(
+
+      width: double.infinity,
+
+      child: ElevatedButton(
+
+        onPressed: () {
+
+          Navigator.push(
+
+            context,
+
+            MaterialPageRoute(
+
+              builder: (_) => ChatScreen(
+                rideId: ride.id,
+              ),
+            ),
+          );
+        },
+
+        child: const Text(
+          "Chat",
+        ),
+      ),
+    ),
+  ],
+),
+  ),
+);
+                    },
+                  );
+                                },
+              ),
+            ),
+          ],
+        ),
+      ),
+      ),
+    );
+  }
+}*/
+

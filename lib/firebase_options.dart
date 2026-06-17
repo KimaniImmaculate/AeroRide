@@ -41,47 +41,47 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyBGCrwgSzns4FEABJRj5FrVcwSCr-19M2M',
-    appId: '1:168014304010:web:73d78b6e92bfff7b9720f3',
-    messagingSenderId: '168014304010',
-    projectId: 'aero-db-53d7a',
-    authDomain: 'aero-db-53d7a.firebaseapp.com',
-    storageBucket: 'aero-db-53d7a.firebasestorage.app',
+    apiKey: 'AIzaSyAvTSJIReXOpASFEbZZuL-ZAwsSqCOmZOQ',
+    appId: '1:889517767998:web:eaffecb7f00797daaa806f',
+    messagingSenderId: '889517767998',
+    projectId: 'aeroride-665af',
+    authDomain: 'aeroride-665af.firebaseapp.com',
+    storageBucket: 'aeroride-665af.firebasestorage.app',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyC_QLDUp7vwn6-3kP1Ilz_Qnf9fKngb-7k',
-    appId: '1:168014304010:android:2e0f03d8bdec94a59720f3',
-    messagingSenderId: '168014304010',
-    projectId: 'aero-db-53d7a',
-    storageBucket: 'aero-db-53d7a.firebasestorage.app',
-  );
-
-  static const FirebaseOptions macos = FirebaseOptions(
-    apiKey: 'AIzaSyCVomo_KSk6_xRUzcy-TxUHwWbq5sx8mEE',
-    appId: '1:168014304010:ios:9c6241eb6b19e15c9720f3',
-    messagingSenderId: '168014304010',
-    projectId: 'aero-db-53d7a',
-    storageBucket: 'aero-db-53d7a.firebasestorage.app',
-    iosBundleId: 'com.example.aeroride',
+    apiKey: 'AIzaSyA-cNRzLAmfPV5JP6ymXMSmdTTDOHrzOOE',
+    appId: '1:889517767998:android:d8d7dd203cdf4320aa806f',
+    messagingSenderId: '889517767998',
+    projectId: 'aeroride-665af',
+    storageBucket: 'aeroride-665af.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyCVomo_KSk6_xRUzcy-TxUHwWbq5sx8mEE',
-    appId: '1:168014304010:ios:9c6241eb6b19e15c9720f3',
-    messagingSenderId: '168014304010',
-    projectId: 'aero-db-53d7a',
-    storageBucket: 'aero-db-53d7a.firebasestorage.app',
+    apiKey: 'AIzaSyBrn827u6Ik9_0ajWPQc0BM8u2wO8Vfl4A',
+    appId: '1:889517767998:ios:664dcf9ea6842697aa806f',
+    messagingSenderId: '889517767998',
+    projectId: 'aeroride-665af',
+    storageBucket: 'aeroride-665af.firebasestorage.app',
+    iosBundleId: 'com.example.aeroride',
+  );
+
+  static const FirebaseOptions macos = FirebaseOptions(
+    apiKey: 'AIzaSyBrn827u6Ik9_0ajWPQc0BM8u2wO8Vfl4A',
+    appId: '1:889517767998:ios:664dcf9ea6842697aa806f',
+    messagingSenderId: '889517767998',
+    projectId: 'aeroride-665af',
+    storageBucket: 'aeroride-665af.firebasestorage.app',
     iosBundleId: 'com.example.aeroride',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyBGCrwgSzns4FEABJRj5FrVcwSCr-19M2M',
-    appId: '1:168014304010:web:df8270639f2012739720f3',
-    messagingSenderId: '168014304010',
-    projectId: 'aero-db-53d7a',
-    authDomain: 'aero-db-53d7a.firebaseapp.com',
-    storageBucket: 'aero-db-53d7a.firebasestorage.app',
+    apiKey: 'AIzaSyAvTSJIReXOpASFEbZZuL-ZAwsSqCOmZOQ',
+    appId: '1:889517767998:web:947668360bd8b103aa806f',
+    messagingSenderId: '889517767998',
+    projectId: 'aeroride-665af',
+    authDomain: 'aeroride-665af.firebaseapp.com',
+    storageBucket: 'aeroride-665af.firebasestorage.app',
   );
 
 }

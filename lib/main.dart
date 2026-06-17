@@ -1,31 +1,10 @@
-import 'dart:async';
-
-import 'package:aeroride/utils/web_helper_stub.dart'
-    if (dart.library.html) 'package:aeroride/utils/web_helper_web.dart'
-    as web_helper;
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:cloud_functions/cloud_functions.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-
-// Force absolute package mappings to resolve types cleanly
-import 'package:aeroride/controllers/ride_controller.dart';
-import 'package:aeroride/firebase_options.dart';
-import 'package:aeroride/screens/role_selection_screen.dart';
-import 'package:aeroride/widgets/main_layout_wrapper.dart';
-import 'package:aeroride/widgets/aero_welcome_view.dart';
-import 'package:aeroride/screens/views/driver_dashboard_view.dart'
-    as driver_views;
-import 'package:aeroride/screens/views/driver_cockpit_view.dart';
-import 'package:aeroride/screens/views/rider_dashboard_view.dart'
-    as rider_views;
-import 'package:aeroride/services/auth_service.dart';
-import 'package:aeroride/screens/views/gateway_portal.dart';
-import 'package:aeroride/services/notification_service.dart';
-import 'package:aeroride/theme/aeroride_theme.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart'; // ⚡ ADDED: To expose the state pipeline
+import 'firebase_options.dart';
+import 'gateway_portal.dart';
+import 'services/ride_service.dart'; // ⚡ ADDED: Imports the RideController you just modified
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -33,22 +12,13 @@ void main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
-  if (kIsWeb) {
-    web_helper.registerWebPlatformView();
-  }
-
-  // Initialize notifications gracefully
-  await _initNotifications();
-
-  runApp(const AeroRideApp());
-}
-
-Future<void> _initNotifications() async {
-  try {
-    await NotificationService().init().timeout(const Duration(seconds: 5));
-  } catch (error) {
-    debugPrint('Notification init skipped: $error');
-  }
+  // ⚡ UPDATED: Wrapped the app initialization inside a ChangeNotifierProvider
+  runApp(
+    ChangeNotifierProvider(
+      create: (_) => RideController(),
+      child: const AeroRideApp(),
+    ),
+  );
 }
 
 class AeroRideApp extends StatelessWidget {
@@ -56,98 +26,21 @@ class AeroRideApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MultiProvider(
-      providers: [
-        ChangeNotifierProvider(
-            create: (_) => RideController()..loadRideTypes()),
-        Provider<AuthService>(create: (_) => AuthService()),
-      ],
-      child: MaterialApp(
-        title: 'AeroRide',
-        debugShowCheckedModeBanner: false,
-        theme: AeroRideTheme.light(),
-        home: const AuthWrapper(),
-      ),
-    );
-  }
-}
-
-class AuthWrapper extends StatefulWidget {
-  const AuthWrapper({super.key});
-
-  @override
-  State<AuthWrapper> createState() => _AuthWrapperState();
-}
-
-class _AuthWrapperState extends State<AuthWrapper> {
-  @override
-  Widget build(BuildContext context) {
-    final authService = AuthService();
-
-    return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
-      builder: (context, snapshot) {
-        // 1. Handle initial connection state
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
-        }
-
-        // Handle Error States
-        if (snapshot.hasError) {
-          return Scaffold(
-            body: Center(child: Text("Startup Error: ${snapshot.error}")),
-          );
-        }
-
-        return const AeroRideGatewayPortal();
-      },
-    );
-  }
-}
-
-// ✅ RETAINED: State key tracker to eliminate multi-swap Web DOM caching crashes
-class _StableDashboardMapWrapper extends StatefulWidget {
-  final Widget child;
-  const _StableDashboardMapWrapper({super.key, required this.child});
-
-  @override
-  State<_StableDashboardMapWrapper> createState() =>
-      _StableDashboardMapWrapperState();
-}
-
-class _StableDashboardMapWrapperState
-    extends State<_StableDashboardMapWrapper> {
-  bool _isRenderReady = false;
-  final Key _domKey = UniqueKey();
-
-  @override
-  void initState() {
-    super.initState();
-    Future.delayed(const Duration(milliseconds: 450), () {
-      if (mounted) {
-        setState(() => _isRenderReady = true);
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (!_isRenderReady) {
-      return const Scaffold(
-        backgroundColor: Colors.white,
-        body: Center(
-          child: CircularProgressIndicator(
-            valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
-          ),
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'AeroRide',
+      theme: ThemeData(
+        primaryColor: const Color(0xFF16A085), // AeroRide Turquoise
+        useMaterial3: true,
+        scaffoldBackgroundColor: const Color(0xFFF8F9FA),
+        textTheme: GoogleFonts.urbanistTextTheme(Theme.of(context).textTheme),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF16A085),
+          primary: const Color(0xFF16A085),
+          brightness: Brightness.light,
         ),
-      );
-    }
-
-    return Container(
-      key: _domKey,
-      child: widget.child,
+      ),
+      home: const AeroRideGatewayPortal(),
     );
   }
 }

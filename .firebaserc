@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "aero-db-53d7a"
-  }
+    "default": "aero-db-53d7a",
+    "aeroride": "aeroride-665af"
+  },
+  "targets": {},
+  "etags": {}
 }

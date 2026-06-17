@@ -3,49 +3,37 @@
     "platforms": {
       "android": {
         "default": {
-          "projectId": "aero-db-53d7a",
-          "appId": "1:168014304010:android:2e0f03d8bdec94a59720f3",
+          "projectId": "aeroride-665af",
+          "appId": "1:889517767998:android:d8d7dd203cdf4320aa806f",
           "fileOutput": "android/app/google-services.json"
         }
       },
       "dart": {
         "lib/firebase_options.dart": {
-          "projectId": "aero-db-53d7a",
+          "projectId": "aeroride-665af",
           "configurations": {
-            "android": "1:168014304010:android:2e0f03d8bdec94a59720f3",
-            "ios": "1:168014304010:ios:9c6241eb6b19e15c9720f3",
-            "macos": "1:168014304010:ios:9c6241eb6b19e15c9720f3",
-            "web": "1:168014304010:web:73d78b6e92bfff7b9720f3",
-            "windows": "1:168014304010:web:df8270639f2012739720f3"
+            "android": "1:889517767998:android:d8d7dd203cdf4320aa806f",
+            "ios": "1:889517767998:ios:664dcf9ea6842697aa806f",
+            "macos": "1:889517767998:ios:664dcf9ea6842697aa806f",
+            "web": "1:889517767998:web:eaffecb7f00797daaa806f",
+            "windows": "1:889517767998:web:947668360bd8b103aa806f"
           }
         }
       }
     }
   },
-  "firestore": {
-    "rules": "firestore.rules"
-  },
-  "functions": {
-    "source": "functions"
-  },
-  "emulators": {
-    "functions": {
-      "host": "127.0.0.1",
-      "port": 5001
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "disallowLegacyRuntimeConfig": true,
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ]
     }
-  },
-  "hosting": {
-    "public": "build/web",
-    "ignore": [
-      "firebase.json",
-      "**/.*",
-      "**/node_modules/**"
-    ],
-    "rewrites": [
-      {
-        "source": "**",
-        "destination": "/index.html"
-      }
-    ]
-  }
+  ]
 }

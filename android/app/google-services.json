@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "168014304010",
-    "project_id": "aero-db-53d7a",
-    "storage_bucket": "aero-db-53d7a.firebasestorage.app"
+    "project_number": "889517767998",
+    "project_id": "aeroride-665af",
+    "storage_bucket": "aeroride-665af.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:168014304010:android:2e0f03d8bdec94a59720f3",
+        "mobilesdk_app_id": "1:889517767998:android:d8d7dd203cdf4320aa806f",
         "android_client_info": {
           "package_name": "com.example.aeroride"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyC_QLDUp7vwn6-3kP1Ilz_Qnf9fKngb-7k"
+          "current_key": "AIzaSyA-cNRzLAmfPV5JP6ymXMSmdTTDOHrzOOE"
         }
       ],
       "services": {
