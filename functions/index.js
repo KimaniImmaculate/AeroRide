@@ -9,6 +9,7 @@ const admin = require('firebase-admin');
 const https = require('https');
 const { URL } = require('url');
 const { HttpsError, onRequest } = require('firebase-functions/v2/https');
+const { onDocumentUpdated } = require('firebase-functions/v2/firestore');
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -245,7 +246,7 @@ exports.mpesaCallback = onRequest({ region: 'us-central1', cors: true }, async (
 // ==========================================
 // 3. DIRECTIONS PROXY FUNCTION
 // ==========================================
-exports.directionsProxy = onRequest({ region: 'us-central1', cors: true }, async (req, res) => {
+exports.directionsProxy = onRequest({ region: 'us-central1', cors: true, secrets: ["GOOGLE_MAPS_API_KEY"] }, async (req, res) => {
   try {
     const origin = req.query.origin;
     const destination = req.query.destination;
@@ -295,11 +296,9 @@ const ALLOWED = {
   cancelled: []
 };
 
-exports.enforceRideStateMachine = functions.firestore
-  .document('rides/{rideId}')
-  .onUpdate(async (change, context) => {
-    const before = change.before.data() || {};
-    const after = change.after.data() || {};
+exports.enforceRideStateMachine = onDocumentUpdated('rides/{rideId}', async (event) => {
+    const before = event.data.before.data() || {};
+    const after = event.data.after.data() || {};
 
     // 1. STRICT GUARD: Exit immediately if status hasn't changed to block standard iterations
     if (before.status === after.status) {
@@ -312,7 +311,7 @@ exports.enforceRideStateMachine = functions.firestore
       return null;
     }
 
-    const rideId = context.params.rideId;
+    const rideId = event.params.rideId;
     const prev = before.status || 'searching';
     const next = after.status || 'searching';
 

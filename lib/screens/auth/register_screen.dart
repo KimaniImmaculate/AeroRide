@@ -13,6 +13,7 @@ class RegisterScreen extends StatefulWidget {
 class _RegisterScreenState extends State<RegisterScreen> {
   final TextEditingController emailController = TextEditingController();
   final TextEditingController passwordController = TextEditingController();
+  final TextEditingController phoneController = TextEditingController();
 
   final AuthService authService = AuthService();
   final UserService userService = UserService();
@@ -24,7 +25,71 @@ class _RegisterScreenState extends State<RegisterScreen> {
   // AeroRide Turquoise Theme Color
   static const Color primaryTurquoise = Color(0xFF16A085);
 
+  @override
+  void dispose() {
+    emailController.dispose();
+    passwordController.dispose();
+    phoneController.dispose();
+    super.dispose();
+  }
+
   Future<void> register() async {
+    final String phone = phoneController.text.trim();
+
+    if (phone.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text("Please enter your phone number"),
+            behavior: SnackBarBehavior.floating),
+      );
+      return;
+    }
+
+    setState(() {
+      isLoading = true;
+    });
+
+    final user = await authService.registerUser(
+      email: emailController.text.trim(),
+      password: passwordController.text.trim(),
+    );
+
+    setState(() {
+      isLoading = false;
+    });
+
+    if (user != null) {
+      // 🌟 Pass the phone number here to save it into the database record safely
+      await userService.saveUserData(
+        uid: user.uid,
+        email: emailController.text.trim(),
+        role: selectedRole,
+        phone: phone,
+      );
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Registration Successful 🎉"),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+
+      Navigator.pop(context);
+    } else {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+          content: Text("Registration Failed. Please try again."),
+        ),
+      );
+    }
+  }
+
+  /*Future<void> register() async {
     setState(() {
       isLoading = true;
     });
@@ -65,7 +130,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         ),
       );
     }
-  }
+  }*/
 
   @override
   Widget build(BuildContext context) {
@@ -204,6 +269,38 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               });
                             },
                           ),
+                          filled: true,
+                          fillColor: Colors.black.withValues(alpha: 0.25),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14),
+                            borderSide: BorderSide(
+                                color: Colors.white.withValues(alpha: 0.08)),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14),
+                            borderSide: BorderSide(
+                                color: Colors.white.withValues(alpha: 0.08)),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14),
+                            borderSide: const BorderSide(
+                                color: primaryTurquoise, width: 2),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+
+                      // Phone Input field
+                      TextField(
+                        controller: phoneController,
+                        keyboardType: TextInputType.phone,
+                        style: GoogleFonts.urbanist(color: Colors.white),
+                        decoration: InputDecoration(
+                          labelText: "Phone Number",
+                          labelStyle: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.4)),
+                          prefixIcon: const Icon(Icons.phone_android_outlined,
+                              color: primaryTurquoise),
                           filled: true,
                           fillColor: Colors.black.withValues(alpha: 0.25),
                           border: OutlineInputBorder(

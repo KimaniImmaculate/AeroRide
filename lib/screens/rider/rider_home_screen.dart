@@ -9,12 +9,14 @@ import 'package:geolocator/geolocator.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'dart:async';
 import '../chat_screen.dart';
-import 'package:geocoding/geocoding.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import 'dart:js_interop';
+import 'dart:developer' as dev;
+import 'dart:js_interop_unsafe';
 import '../landing_screen.dart';
 import '../../services/payment_service.dart';
 
@@ -29,6 +31,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   // Vibrant Turquoise Theme Color
   static const Color primaryTurquoise = Color(0xFF16A085);
 
+  static const String _googleMapsApiKey =
+      "AIzaSyANuwPwm1dRFvh_ySIIiW22-dWnUsMrp0k";
+
   final TextEditingController pickupController = TextEditingController();
   final TextEditingController destinationController = TextEditingController();
   final RideService rideService = RideService();
@@ -42,13 +47,15 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
 
   bool isLoading = false;
   GoogleMapController? mapController;
-  Set<Polyline> polylines = {};
+  Set<Polyline> _polylines = {};
   Set<Marker> markers = {};
+  Set<Marker> _driverMarkers = {};
+  StreamSubscription<QuerySnapshot>? _driverSubscription;
 
   List<LatLng> polylineCoordinates = [];
 
   PolylinePoints polylinePoints = PolylinePoints(
-    apiKey: "AIzaSyDvFvwSP5-BBLhOvzj3o_1UKKkuGfF1y4U",
+    apiKey: _googleMapsApiKey,
   );
   String? currentRideId;
   bool selectingPickup = false;
@@ -63,6 +70,94 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   void initState() {
     super.initState();
     getCurrentLocation();
+    _startDriverListener();
+  }
+
+  @override
+  void dispose() {
+    _driverSubscription?.cancel();
+    pickupController.dispose();
+    destinationController.dispose();
+    _mpesaPhoneController.dispose();
+    sosMessageController.dispose();
+    cancelReasonController.dispose();
+    super.dispose();
+  }
+
+  /// Centralized marker management to prevent markers from disappearing
+  void _syncMarkers() {
+    if (!mounted) return;
+    setState(() {
+      markers = {
+        if (pickupLocation != null)
+          Marker(
+            markerId: const MarkerId('pickup'),
+            position: pickupLocation!,
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+                BitmapDescriptor.hueGreen),
+            infoWindow: const InfoWindow(title: "My Location"),
+          ),
+        if (destinationLocation != null)
+          Marker(
+            markerId: const MarkerId('destination'),
+            position: destinationLocation!,
+            icon:
+                BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+            infoWindow: const InfoWindow(title: "Destination"),
+          ),
+        ..._driverMarkers,
+      };
+    });
+  }
+
+  void _startDriverListener() {
+    _driverSubscription =
+        firestore.collection('users').snapshots().listen((snapshot) {
+      if (!mounted) return;
+
+      Set<Marker> updatedDriverMarkers = {};
+      for (var doc in snapshot.docs) {
+        final data = doc.data() as Map<String, dynamic>?;
+        if (data != null &&
+            data['latitude'] != null &&
+            data['longitude'] != null &&
+            data['isOnline'] == true) {
+          try {
+            double driverLat = (data['latitude'] as num).toDouble();
+            double driverLng = (data['longitude'] as num).toDouble();
+
+            double distance = 10000; // Default large distance
+            if (pickupLocation != null) {
+              distance = Geolocator.distanceBetween(
+                pickupLocation!.latitude,
+                pickupLocation!.longitude,
+                driverLat,
+                driverLng,
+              );
+            }
+
+            if (distance <= 5000 || pickupLocation == null) {
+              updatedDriverMarkers.add(
+                Marker(
+                  markerId: MarkerId("driver_${doc.id}"),
+                  position: LatLng(driverLat, driverLng),
+                  icon: BitmapDescriptor.defaultMarkerWithHue(
+                      BitmapDescriptor.hueBlue),
+                  infoWindow: InfoWindow(
+                      title: "Driver: ${data['email']?.split('@')[0]}"),
+                ),
+              );
+            }
+          } catch (e) {
+            debugPrint("Error parsing driver loc: $e");
+            dev.log("RIDER_LOG: Error parsing driver loc", error: e);
+          }
+        }
+      }
+
+      _driverMarkers = updatedDriverMarkers;
+      _syncMarkers();
+    });
   }
 
   Future<void> _handleLogout(BuildContext context) async {
@@ -197,18 +292,36 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
         position.longitude,
       );
       pickupController.text = pickupName;
+      _syncMarkers();
     });
   }
 
   Future<String> getPlaceName(double latitude, double longitude) async {
+    if (kIsWeb) {
+      final completer = Completer<String>();
+      void handleGeocodeResponse(JSString address, JSString status) {
+        completer.complete(address.toDart);
+      }
+
+      globalContext.callMethodVarArgs(
+        'aerorideGetPlaceName'.toJS,
+        [
+          latitude.toJS,
+          longitude.toJS,
+          _googleMapsApiKey.toJS,
+          handleGeocodeResponse.toJS,
+        ],
+      );
+      return completer.future;
+    }
+
     try {
       final url = "https://maps.googleapis.com/maps/api/geocode/json"
           "?latlng=$latitude,$longitude"
-          "&key=AIzaSyDvFvwSP5-BBLhOvzj3o_1UKKkuGfF1y4U";
+          "&key=$_googleMapsApiKey";
 
       final response = await http.get(Uri.parse(url));
-      print(response.statusCode);
-      print(response.body);
+      dev.log("RIDER_LOG: Geocode status: ${response.statusCode}");
 
       final data = jsonDecode(response.body);
 
@@ -217,77 +330,248 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
       }
       return "Unknown Location";
     } catch (e) {
-      print("Geocoding failed: $e");
+      dev.log("RIDER_LOG: Geocoding failed", error: e);
       return "Unknown Location";
     }
   }
 
   Future<void> getRoute() async {
-    print("GET ROUTE STARTED");
+    debugPrint("RIDER_LOG: GET ROUTE STARTED");
     if (pickupLocation == null || destinationLocation == null) {
       return;
     }
 
-    final url = "https://maps.googleapis.com/maps/api/directions/json"
-        "?origin=${pickupLocation!.latitude},${pickupLocation!.longitude}"
-        "&destination=${destinationLocation!.latitude},${destinationLocation!.longitude}"
-        "&mode=driving"
-        "&key=AIzaSyDvFvwSP5-BBLhOvzj3o_1UKKkuGfF1y4U";
+    if (kIsWeb) {
+      void handleDirectionsResponse(
+          JSString? jsonString, JSString? status) async {
+        try {
+          final dartStatus = status?.toDart ?? 'ERROR';
+          final dartJson = jsonString?.toDart ?? '{}';
+          dev.log("RIDER_LOG: JS Interop Status: $dartStatus");
 
-    final response = await http.get(Uri.parse(url));
-    final data = jsonDecode(response.body);
-    print(response.body);
-    print("Directions Status: ${data["status"]}");
+          if (dartStatus == 'OK' && dartJson != '{}') {
+            final data = jsonDecode(dartJson) as Map<String, dynamic>;
+            final List? routes = data["routes"];
 
-    if (data["routes"].isEmpty) {
-      print("No routes found");
-      return;
-    }
+            if (routes != null && routes.isNotEmpty) {
+              final polylineData = routes[0]["overview_polyline"];
 
-    String encodedPolyline = data["routes"][0]["overview_polyline"]["points"];
-    List<LatLng> routePoints = decodePolyline(encodedPolyline);
-    print("Route points: ${routePoints.length}");
-    print("Adding polyline...");
+              // STRATEGY 1: Use pre-decoded list from JS (most robust for Web)
+              final List? pointsListRaw = polylineData?["points_list"];
+              if (pointsListRaw != null && pointsListRaw.isNotEmpty) {
+                try {
+                  List<LatLng> routePoints = [];
+                  for (final p in pointsListRaw) {
+                    // Defensive parsing: check if p is a Map and contains 'lat'/'lng'
+                    if (p is Map<Object?, Object?>) {
+                      final lat = p['lat'];
+                      final lng = p['lng'];
+                      if (lat is num && lng is num) {
+                        routePoints.add(LatLng(lat.toDouble(), lng.toDouble()));
+                      } else {
+                        dev.log(
+                            "RIDER_LOG: Invalid lat/lng type in pointsList item: $p");
+                      }
+                    } else {
+                      dev.log(
+                          "RIDER_LOG: Unexpected item type in pointsList: $p");
+                    }
+                  }
 
-    setState(() {
-      polylines = {
-        Polyline(
-          polylineId:
-              PolylineId("route_${DateTime.now().millisecondsSinceEpoch}"),
-          width: 5,
-          color: Theme.of(context).primaryColor,
-          points: routePoints,
-        ),
-      };
-    });
-    print("Polylines count: ${polylines.length}");
+                  if (routePoints.isNotEmpty) {
+                    await Future.delayed(const Duration(milliseconds: 100));
+                    _updateRouteUI(routePoints);
+                    return; // Successfully updated from JS pointsList
+                  } else {
+                    dev.log(
+                        "RIDER_LOG: Parsed pointsList was empty after filtering. Attempting encoded string fallback.");
+                  }
+                } catch (e, stack) {
+                  dev.log("RIDER_LOG: Error during pointsList parsing from JS",
+                      error: e, stackTrace: stack);
+                  // Fall through to encoded string or straight line fallback
+                }
+              }
 
-    if (mapController != null && routePoints.isNotEmpty) {
-      LatLng boundsSouthWest;
-      LatLng boundsNorthEast;
+              // STRATEGY 2: Falling back to string decoding (inside try-catch)
+              final String? encoded = polylineData?["points"];
+              if (encoded != null && encoded.isNotEmpty) {
+                try {
+                  List<LatLng> decoded = decodePolyline(encoded);
+                  if (decoded.isNotEmpty) {
+                    await Future.delayed(const Duration(milliseconds: 100));
+                    _updateRouteUI(decoded);
+                    return; // Successfully updated from encoded string
+                  } else {
+                    dev.log(
+                        "RIDER_LOG: decodePolyline returned empty list. Falling back to straight line.");
+                  }
+                } catch (e, stack) {
+                  dev.log("RIDER_LOG: Error during decodePolyline fallback",
+                      error: e, stackTrace: stack);
+                  // Fall through to straight line fallback
+                }
+              }
 
-      double minLat = pickupLocation!.latitude < destinationLocation!.latitude
-          ? pickupLocation!.latitude
-          : destinationLocation!.latitude;
-      double maxLat = pickupLocation!.latitude > destinationLocation!.latitude
-          ? pickupLocation!.latitude
-          : destinationLocation!.latitude;
-      double minLng = pickupLocation!.longitude < destinationLocation!.longitude
-          ? pickupLocation!.longitude
-          : destinationLocation!.longitude;
-      double maxLng = pickupLocation!.longitude > destinationLocation!.longitude
-          ? pickupLocation!.longitude
-          : destinationLocation!.longitude;
+              // Final fallback if all else fails
+              dev.log(
+                  "RIDER_LOG: All polyline decoding strategies failed. Drawing straight line.");
+              await Future.delayed(const Duration(milliseconds: 100));
+              _updateRouteUI([pickupLocation!, destinationLocation!]);
+              return;
+            } else {
+              dev.log("RIDER_LOG: Routes array empty despite OK status.");
+              await Future.delayed(const Duration(milliseconds: 100));
+              _updateRouteUI([pickupLocation!, destinationLocation!]);
+            }
+          } else {
+            dev.log("RIDER_LOG: Directions failed via JS: $dartStatus");
+            if (dartStatus == 'ZERO_RESULTS' && mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                      "No driving route found. Showing direct path instead."),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
+            // Fallback for failed API status
+            await Future.delayed(const Duration(milliseconds: 100));
+            _updateRouteUI([pickupLocation!, destinationLocation!]);
+          }
+        } catch (e, stack) {
+          dev.log("RIDER_LOG: Fatal exception in JS Callback loop",
+              error: e, stackTrace: stack);
+          await Future.delayed(const Duration(milliseconds: 100));
+          _updateRouteUI([pickupLocation!, destinationLocation!]);
+        }
+      }
 
-      boundsSouthWest = LatLng(minLat, minLng);
-      boundsNorthEast = LatLng(maxLat, maxLng);
-
-      mapController!.animateCamera(
-        CameraUpdate.newLatLngBounds(
-          LatLngBounds(southwest: boundsSouthWest, northeast: boundsNorthEast),
-          70,
-        ),
+      // Use globalContext and callMethodVarArgs from dart:js_interop_unsafe.
+      // callMethod only supports up to 4 arguments, but we need 6.
+      globalContext.callMethodVarArgs(
+        'aerorideFetchDirections'.toJS,
+        [
+          pickupLocation!.latitude.toJS,
+          pickupLocation!.longitude.toJS,
+          destinationLocation!.latitude.toJS,
+          destinationLocation!.longitude.toJS,
+          _googleMapsApiKey.toJS,
+          handleDirectionsResponse.toJS,
+        ],
       );
+    } else {
+      // Use direct HTTP on Mobile (CORS doesn't apply)
+      final url = "https://maps.googleapis.com/maps/api/directions/json"
+          "?origin=${pickupLocation!.latitude},${pickupLocation!.longitude}"
+          "&destination=${destinationLocation!.latitude},${destinationLocation!.longitude}"
+          "&mode=driving"
+          "&key=$_googleMapsApiKey";
+
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        // Safe Array Bounds Check for Mobile
+        if (data["routes"] != null && (data["routes"] as List).isNotEmpty) {
+          String encodedPolyline =
+              data["routes"][0]["overview_polyline"]["points"];
+          List<LatLng> routePoints = decodePolyline(encodedPolyline);
+          _updateRouteUI(routePoints); // Mobile decode is generally stable
+        } else {
+          dev.log("RIDER_LOG: No routes found on mobile: ${data["status"]}");
+          _updateRouteUI([pickupLocation!, destinationLocation!]);
+        }
+      }
+    }
+  }
+
+  void _updateRouteUI(List<LatLng> routePoints) {
+    if (!mounted) return;
+    try {
+      if (routePoints.isEmpty) return;
+      final validPoints = routePoints
+          .where((p) => p.latitude.isFinite && p.longitude.isFinite)
+          .toList();
+
+      if (validPoints.isEmpty) {
+        dev.log("RIDER_LOG: No valid points found for route.");
+        return;
+      }
+
+      dev.log("RIDER_LOG: Updating UI with ${validPoints.length} points");
+
+      if (!mounted) return;
+      setState(() {
+        // Clean Literal Reassignment to prevent mutation deadlocks
+        _polylines = {
+          Polyline(
+            polylineId: const PolylineId("active_ride_route"),
+            points: validPoints,
+            color: const Color(0xFF00796B),
+            width: 5,
+          ),
+        };
+      });
+
+      if (mapController == null) return;
+
+      double minLat = validPoints.first.latitude;
+      double maxLat = validPoints.first.latitude;
+      double minLng = validPoints.first.longitude;
+      double maxLng = validPoints.first.longitude;
+
+      final List<LatLng> boundsPoints = List.from(validPoints);
+      if (pickupLocation != null) boundsPoints.add(pickupLocation!);
+      if (destinationLocation != null) boundsPoints.add(destinationLocation!);
+
+      for (var point in boundsPoints) {
+        if (point.latitude < minLat) minLat = point.latitude;
+        if (point.latitude > maxLat) maxLat = point.latitude;
+        if (point.longitude < minLng) minLng = point.longitude;
+        if (point.longitude > maxLng) maxLng = point.longitude;
+      }
+
+      // Buffer to prevent zero-size bounds
+      const double delta = 0.001;
+      if (minLat == maxLat) {
+        minLat -= delta;
+        maxLat += delta;
+      }
+      if (minLng == maxLng) {
+        minLng -= delta;
+        maxLng += delta;
+      }
+
+      // Hard validation of bounds for Web JS Bridge
+      final LatLng sw = LatLng(minLat, minLng);
+      final LatLng ne = LatLng(maxLat, maxLng);
+
+      if (sw.latitude >= ne.latitude || sw.longitude >= ne.longitude) {
+        dev.log("RIDER_LOG: Invalid bounds detected, skipping animation.");
+        return;
+      }
+
+      final bounds = LatLngBounds(southwest: sw, northeast: ne);
+      if (!mounted) return;
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted && mapController != null) {
+          try {
+            mapController!
+                .animateCamera(
+              CameraUpdate.newLatLngBounds(bounds, kIsWeb ? 30 : 50),
+            )
+                .catchError((e) {
+              dev.log("RIDER_LOG: animateCamera catchError", error: e);
+              mapController?.moveCamera(CameraUpdate.newLatLng(sw));
+            });
+          } catch (e) {
+            dev.log("RIDER_LOG: Camera update failed", error: e);
+            mapController?.moveCamera(CameraUpdate.newLatLng(sw));
+          }
+        }
+      });
+    } catch (e) {
+      dev.log("RIDER_LOG: Fatal exception in _updateRouteUI", error: e);
     }
   }
 
@@ -318,8 +602,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
 
     double distanceKm = distanceMeters / 1000;
     double fare = distanceKm * 20;
-    print("Distance: $distanceKm km");
-    print("Fare: $fare");
+    dev.log("RIDER_LOG: Distance: $distanceKm km");
+    dev.log("RIDER_LOG: Fare: $fare");
 
     final rideId = await rideService.requestRide(
       pickup: pickupController.text.trim(),
@@ -428,132 +712,50 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // --- FIRESTORE STREAM (MARKER UPDATES) ---
-              SizedBox(
-                height: 0.1,
-                child: StreamBuilder<QuerySnapshot>(
-                  stream: firestore.collection('users').snapshots(),
-                  builder: (context, snapshot) {
-                    if (snapshot.hasData) {
-                      Set<Marker> updatedMarkers = {};
-
-                      if (pickupLocation != null) {
-                        updatedMarkers.add(
-                          Marker(
-                            markerId: const MarkerId('pickup'),
-                            position: pickupLocation!,
-                            icon: BitmapDescriptor.defaultMarkerWithHue(
-                                BitmapDescriptor.hueGreen),
-                            infoWindow:
-                                const InfoWindow(title: 'Pickup Location'),
-                          ),
-                        );
-                      }
-
-                      if (destinationLocation != null) {
-                        updatedMarkers.add(
-                          Marker(
-                            markerId: const MarkerId('destination'),
-                            position: destinationLocation!,
-                            infoWindow:
-                                const InfoWindow(title: 'Destination Target'),
-                          ),
-                        );
-                      }
-
-                      for (var doc in snapshot.data!.docs) {
-                        final data = doc.data() as Map<String, dynamic>;
-                        if (data['latitude'] != null &&
-                            data['longitude'] != null &&
-                            data['isOnline'] == true &&
-                            pickupLocation != null) {
-                          double distance = Geolocator.distanceBetween(
-                            pickupLocation!.latitude,
-                            pickupLocation!.longitude,
-                            (data['latitude'] as num).toDouble(),
-                            (data['longitude'] as num).toDouble(),
-                          );
-
-                          if (distance <= 5000) {
-                            updatedMarkers.add(
-                              Marker(
-                                markerId: MarkerId(doc.id),
-                                position: LatLng(
-                                  double.parse(data['latitude'].toString()),
-                                  double.parse(data['longitude'].toString()),
-                                ),
-                                icon: BitmapDescriptor.defaultMarkerWithHue(
-                                    BitmapDescriptor.hueBlue),
-                                infoWindow: InfoWindow(title: data['email']),
-                              ),
-                            );
-                          }
-                        }
-                      }
-
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (mounted) {
-                          setState(() {
-                            markers = updatedMarkers;
-                          });
-                        }
-                      });
-                    }
-                    return const SizedBox.shrink();
-                  },
-                ),
-              ),
-
-              // --- PERMANENT INDEPENDENT MAP VIEWPORT (HCI CARD UPGRADE) ---
+              // --- PERMANENT STABLE MAP VIEWPORT ---
               Container(
                 height: 380,
+                width: double.infinity,
                 decoration: BoxDecoration(
                   color: const Color(0xFF1A2522),
                   borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: Colors.white10,
-                    width: 1.0,
-                  ),
+                  border: Border.all(color: Colors.white10, width: 1.0),
                 ),
-                child: GoogleMap(
-                  initialCameraPosition: initialPosition,
-                  mapType: MapType.normal,
-                  myLocationEnabled: true,
-                  myLocationButtonEnabled: true,
-                  onMapCreated: (controller) {
-                    mapController = controller;
-                  },
-                  markers: markers,
-                  polylines: polylines,
-                  onTap: (LatLng position) async {
-                    if (selectingPickup) {
-                      String placeName = await getPlaceName(
-                          position.latitude, position.longitude);
-                      setState(() {
-                        pickupLocation = position;
-                        pickupController.text = placeName;
-                        selectingPickup = false;
-                      });
-
-                      // Re-calculate route if destination is already set
-                      if (destinationLocation != null) {
-                        WidgetsBinding.instance
-                            .addPostFrameCallback((_) => getRoute());
-                      }
-                      return;
-                    }
-
-                    String placeName = await getPlaceName(
-                        position.latitude, position.longitude);
-                    setState(() {
-                      destinationLocation = position;
-                      destinationController.text = placeName;
-                    });
-
-                    // Calculate route after state is committed
-                    WidgetsBinding.instance
-                        .addPostFrameCallback((_) => getRoute());
-                  },
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(24),
+                  child: SizedBox.expand(
+                    child: GoogleMap(
+                      // The ValueKey ensures the Map's identity is preserved during builds
+                      key: const ValueKey('aeroride_web_stable_map'),
+                      initialCameraPosition: initialPosition,
+                      mapType: MapType.normal,
+                      myLocationEnabled: true,
+                      myLocationButtonEnabled: true,
+                      onMapCreated: (controller) => mapController = controller,
+                      // markers and polylines are now updated by the background listener and getRoute()
+                      markers: markers,
+                      polylines: _polylines,
+                      onTap: (LatLng position) async {
+                        String placeName = await getPlaceName(
+                            position.latitude, position.longitude);
+                        setState(() {
+                          if (selectingPickup) {
+                            pickupLocation = position;
+                            pickupController.text = placeName;
+                            selectingPickup = false;
+                          } else {
+                            destinationLocation = position;
+                            destinationController.text = placeName;
+                          }
+                          _syncMarkers();
+                        });
+                        if (pickupLocation != null &&
+                            destinationLocation != null) {
+                          getRoute();
+                        }
+                      },
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(height: 24),
@@ -693,52 +895,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                     if (currentStatus != _lastAlertedStatus) {
                       _lastAlertedStatus =
                           currentStatus; // Lock state immediately
-
-                      if (currentStatus == 'accepted') {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            backgroundColor: Colors.green,
-                            behavior: SnackBarBehavior.floating,
-                            duration: Duration(seconds: 4),
-                            content: Text("Driver accepted your ride 🚖",
-                                style: TextStyle(
-                                    fontSize: 16, fontWeight: FontWeight.bold)),
-                          ),
-                        );
-                      } else if (currentStatus == 'cancelled') {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            backgroundColor: Colors.red,
-                            behavior: SnackBarBehavior.floating,
-                            duration: Duration(seconds: 5),
-                            content: Text("🚨 This trip has been cancelled!",
-                                style: TextStyle(
-                                    fontSize: 16, fontWeight: FontWeight.bold)),
-                          ),
-                        );
-                      } else if (currentStatus == 'started') {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            backgroundColor: Colors.blue,
-                            behavior: SnackBarBehavior.floating,
-                            duration: Duration(seconds: 4),
-                            content: Text("Trip started successfully 🛣️",
-                                style: TextStyle(
-                                    fontSize: 16, fontWeight: FontWeight.bold)),
-                          ),
-                        );
-                      } else if (currentStatus == 'completed') {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            backgroundColor: Colors.purple,
-                            behavior: SnackBarBehavior.floating,
-                            duration: Duration(seconds: 4),
-                            content: Text("Trip completed ✅",
-                                style: TextStyle(
-                                    fontSize: 16, fontWeight: FontWeight.bold)),
-                          ),
-                        );
-                      }
+                      _handleStatusNotifications(context, currentStatus);
                     }
                   });
 
@@ -818,21 +975,6 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                               ),
                             ],
                           ),
-                        ),
-                      ],
-
-                      if (data['driverEmail'] != null) ...[
-                        const SizedBox(height: 12),
-                        ListTile(
-                          leading: const CircleAvatar(
-                              child: Icon(Icons.directions_car_filled_rounded)),
-                          title: const Text("Assigned Driver"),
-                          subtitle: Text("${data['driverEmail']}",
-                              style:
-                                  const TextStyle(fontWeight: FontWeight.bold)),
-                          tileColor: Colors.grey.shade100,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12)),
                         ),
                       ],
 
@@ -955,272 +1097,81 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
 
                       if (data['status'] == 'completed') ...[
                         const SizedBox(height: 16),
-                        StreamBuilder<DocumentSnapshot>(
-                          stream: FirebaseFirestore.instance
-                              .collection('rides')
-                              .doc(currentRideId ?? data['rideId'])
-                              .snapshots(),
-                          builder: (context, snapshot) {
-                            if (!snapshot.hasData || !snapshot.data!.exists) {
-                              return const Center(
-                                  child: CircularProgressIndicator(
-                                      color: Colors.green));
-                            }
-
-                            var liveData =
-                                snapshot.data!.data() as Map<String, dynamic>;
-                            String currentPaymentStatus =
-                                liveData['paymentStatus'] ?? 'pending';
-
-                            if (currentPaymentStatus == 'paid' ||
-                                currentPaymentStatus == 'completed') {
-                              return _ProfessionalCard(
-                                color: Colors.green.withValues(alpha: 0.1),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: const [
-                                    Icon(Icons.check_circle_rounded,
-                                        color: Colors.green, size: 24),
-                                    SizedBox(width: 10),
-                                    Text(
-                                      "Payment Received: PAID",
-                                      style: TextStyle(
-                                          fontSize: 15,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.green),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            }
-
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Row(
-                                  children: [
-                                    const Icon(Icons.pending_actions,
-                                        color: Colors.orangeAccent),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      "Payment: Collection Pending",
-                                      style: GoogleFonts.urbanist(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.orangeAccent),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 12),
-                                TextField(
-                                  controller: _mpesaPhoneController,
-                                  keyboardType: TextInputType.phone,
-                                  style:
-                                      GoogleFonts.urbanist(color: Colors.white),
-                                  decoration: InputDecoration(
-                                    labelText: "M-Pesa Mobile Number",
-                                    labelStyle:
-                                        const TextStyle(color: Colors.white38),
-                                    prefixIcon: const Icon(Icons.phone_android,
-                                        color: Colors.green),
-                                    border: OutlineInputBorder(
-                                        borderRadius:
-                                            BorderRadius.circular(12)),
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                ElevatedButton(
-                                  onPressed: () async {
-                                    String enteredPhone =
-                                        _mpesaPhoneController.text.trim();
-
-                                    if (enteredPhone.isEmpty) {
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                        const SnackBar(
-                                          content: Text(
-                                              '📱 Please enter an M-Pesa phone number first'),
-                                          backgroundColor: Colors.orange,
-                                        ),
-                                      );
-                                      return;
-                                    }
-
-                                    double actualFare = 1.0;
-                                    if (liveData['fare'] != null) {
-                                      actualFare = double.tryParse(
-                                              liveData['fare'].toString()) ??
-                                          1.0;
-                                    }
-
-                                    String activeRideId = currentRideId ??
-                                        liveData['rideId'] ??
-                                        "UNKNOWN_RIDE";
-                                    print(
-                                        "DEBUG: Dispatching STK to Backend -> Fare: $actualFare, RideID: $activeRideId");
-
-                                    // 1. Display the processing loading circle
-                                    showDialog(
-                                      context: context,
-                                      barrierDismissible: false,
-                                      builder: (context) => const Center(
-                                        child: CircularProgressIndicator(
-                                            color: primaryTurquoise),
-                                      ),
-                                    );
-
-                                    // 2. Fire request and await the long-polling result string from backend
-                                    String paymentResult =
-                                        await PaymentService.requestMpesaPrompt(
-                                      rawPhone: enteredPhone,
-                                      amount: actualFare,
-                                      context: context,
-                                    );
-
-                                    // 3. Safely dismiss the loading dialog box
-                                    if (context.mounted) Navigator.pop(context);
-
-                                    // 4. Act dynamically based on what the phone user did
-                                    if (paymentResult == 'COMPLETED') {
-                                      // Update Cloud Firestore database. This triggers the StreamBuilder instantly!
-                                      await FirebaseFirestore.instance
-                                          .collection('rides')
-                                          .doc(activeRideId)
-                                          .update({'paymentStatus': 'paid'});
-
-                                      if (!context.mounted) return;
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                        const SnackBar(
-                                          content: Text(
-                                              "✅ Payment Received Successfully!"),
-                                          backgroundColor: Colors.green,
-                                        ),
-                                      );
-                                    } else if (paymentResult == 'FAILED') {
-                                      if (!context.mounted) return;
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                        const SnackBar(
-                                          content: Text(
-                                              "❌ Transaction Failed or Canceled by user."),
-                                          backgroundColor: Colors.red,
-                                        ),
-                                      );
-                                    } else {
-                                      if (!context.mounted) return;
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                        const SnackBar(
-                                          content: Text(
-                                              "⏳ Request timed out. Verify your balance and try again."),
-                                          backgroundColor: Colors.amber,
-                                        ),
-                                      );
-                                    }
-                                  },
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: primaryTurquoise,
-                                    padding: const EdgeInsets.symmetric(
-                                        vertical: 14),
-                                    shape: RoundedRectangleBorder(
-                                        borderRadius:
-                                            BorderRadius.circular(12)),
-                                  ),
-                                  child: Text(
-                                    "Pay via M-Pesa Express",
+                        _ProfessionalCard(
+                          color: data['paymentStatus'] == 'paid'
+                              ? Colors.green.withValues(alpha: 0.1)
+                              : Colors.orange.withValues(alpha: 0.05),
+                          child: Column(
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                      data['paymentStatus'] == 'paid'
+                                          ? Icons.check_circle_rounded
+                                          : Icons.pending_actions,
+                                      color: data['paymentStatus'] == 'paid'
+                                          ? Colors.green
+                                          : Colors.orangeAccent),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    data['paymentStatus'] == 'paid'
+                                        ? "Trip Completed & Paid"
+                                        : "Payment Collection Pending",
                                     style: GoogleFonts.urbanist(
-                                        color: Colors.white,
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold),
+                                        fontWeight: FontWeight.bold,
+                                        color: data['paymentStatus'] == 'paid'
+                                            ? Colors.green
+                                            : Colors.orangeAccent),
                                   ),
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-                        const SizedBox(height: 12),
-                        ElevatedButton.icon(
-                          onPressed: () {
-                            showDialog(
-                              context: context,
-                              builder: (context) {
-                                double rating = 5;
-                                return AlertDialog(
-                                  backgroundColor: const Color(0xFF1A2522),
-                                  shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(24),
-                                      side: const BorderSide(
-                                          color: Colors.white12)),
-                                  title: Text("Rate Driver",
-                                      style: GoogleFonts.urbanist(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.bold)),
-                                  content: StatefulBuilder(
-                                    builder: (context, setDialogState) {
-                                      return Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Slider(
-                                            activeColor: primaryTurquoise,
-                                            inactiveColor: Colors.white12,
-                                            value: rating,
-                                            min: 1,
-                                            max: 5,
-                                            divisions: 4,
-                                            label: rating.toString(),
-                                            onChanged: (value) {
-                                              setDialogState(() {
-                                                rating = value;
-                                              });
-                                            },
-                                          ),
-                                          Text("${rating.toInt()} / 5 Stars",
-                                              style: GoogleFonts.urbanist(
-                                                  color: Colors.white,
-                                                  fontWeight: FontWeight.bold)),
-                                        ],
-                                      );
-                                    },
-                                  ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context),
-                                      child: Text("Cancel",
-                                          style: GoogleFonts.urbanist(
-                                              color: Colors.grey)),
+                                ],
+                              ),
+                              const SizedBox(height: 16),
+                              Row(
+                                children: [
+                                  if (data['paymentStatus'] != 'paid') ...[
+                                    Expanded(
+                                      child: ElevatedButton(
+                                        onPressed: () =>
+                                            _showPaymentForm(context, data),
+                                        style: ElevatedButton.styleFrom(
+                                            backgroundColor: primaryTurquoise,
+                                            shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(12))),
+                                        child: const Text("Pay Fare",
+                                            style:
+                                                TextStyle(color: Colors.white)),
+                                      ),
                                     ),
-                                    ElevatedButton(
-                                      onPressed: () async {
-                                        await firestore
-                                            .collection('rides')
-                                            .doc(currentRideId)
-                                            .update({
-                                          'rating': rating.toInt(),
-                                        });
-
-                                        await rideService.updateDriverRating(
-                                          driverId: data['driverId'],
-                                        );
-
-                                        Navigator.pop(context);
-                                      },
-                                      child: Text("Submit Rating",
-                                          style: GoogleFonts.urbanist(
-                                              fontWeight: FontWeight.bold)),
-                                    ),
+                                    const SizedBox(width: 12),
                                   ],
-                                );
-                              },
-                            );
-                          },
-                          icon: const Icon(Icons.star_rate_rounded),
-                          label: Text("Rate Driver",
-                              style: GoogleFonts.urbanist(
-                                  fontWeight: FontWeight.bold)),
-                          style: ElevatedButton.styleFrom(
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 12)),
+                                  Expanded(
+                                    child: ElevatedButton.icon(
+                                      onPressed: () =>
+                                          _showRatingDialog(context, data),
+                                      icon: const Icon(Icons.star_rate_rounded,
+                                          color: Colors.white, size: 20),
+                                      label: const Text("Rate Driver",
+                                          style: TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold)),
+                                      style: ElevatedButton.styleFrom(
+                                          backgroundColor:
+                                              data['paymentStatus'] == 'paid'
+                                                  ? primaryTurquoise
+                                                  : Colors.white10,
+                                          padding: const EdgeInsets.symmetric(
+                                              vertical: 12),
+                                          shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(12))),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
                         ),
                       ],
                     ],
@@ -1253,6 +1204,233 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  void _handleStatusNotifications(BuildContext context, String? currentStatus) {
+    if (currentStatus == 'accepted') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Colors.green,
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 4),
+          content: Text("Driver accepted your ride 🚖",
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        ),
+      );
+    } else if (currentStatus == 'cancelled') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 5),
+          content: Text("🚨 This trip has been cancelled!",
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        ),
+      );
+    } else if (currentStatus == 'started') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Colors.blue,
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 4),
+          content: Text("Trip started successfully 🛣️",
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        ),
+      );
+    } else if (currentStatus == 'completed') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Colors.purple,
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 4),
+          content: Text("Trip completed ✅",
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        ),
+      );
+    }
+  }
+
+  void _showPaymentForm(BuildContext context, Map<String, dynamic> data) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1A2522),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+              side: const BorderSide(color: Colors.white12)),
+          title: Text("Trip Payment",
+              style: GoogleFonts.urbanist(
+                  color: Colors.white, fontWeight: FontWeight.bold)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  "Fare Amount: KES ${data['fare']}",
+                  style: GoogleFonts.urbanist(
+                      color: primaryTurquoise,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _mpesaPhoneController,
+                  keyboardType: TextInputType.phone,
+                  style: GoogleFonts.urbanist(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: "M-Pesa Number",
+                    labelStyle: const TextStyle(color: Colors.white38),
+                    prefixIcon:
+                        const Icon(Icons.phone_android, color: Colors.green),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton(
+                  onPressed: () async {
+                    String enteredPhone = _mpesaPhoneController.text.trim();
+                    if (enteredPhone.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text('📱 Please enter a phone number')),
+                      );
+                      return;
+                    }
+                    double actualFare =
+                        double.tryParse(data['fare'].toString()) ?? 1.0;
+                    String activeRideId =
+                        currentRideId ?? data['rideId'] ?? "UNKNOWN_RIDE";
+
+                    Navigator.pop(context); // Close form
+
+                    showDialog(
+                      context: context,
+                      barrierDismissible: false,
+                      builder: (context) => const Center(
+                          child: CircularProgressIndicator(
+                              color: primaryTurquoise)),
+                    );
+
+                    String result = await PaymentService.requestMpesaPrompt(
+                      rawPhone: enteredPhone,
+                      amount: actualFare,
+                      context: context,
+                    );
+
+                    if (context.mounted)
+                      Navigator.pop(context); // Dismiss loading
+
+                    if (result == 'COMPLETED') {
+                      await firestore
+                          .collection('rides')
+                          .doc(activeRideId)
+                          .update({'paymentStatus': 'paid'});
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                              content: Text("✅ Payment Successful!"),
+                              backgroundColor: Colors.green),
+                        );
+                      }
+                    } else {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                              content: Text(result == 'FAILED'
+                                  ? "❌ Payment Failed"
+                                  : "⏳ Timeout"),
+                              backgroundColor: Colors.red),
+                        );
+                      }
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: primaryTurquoise,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: Text("Pay Now",
+                      style: GoogleFonts.urbanist(
+                          color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showRatingDialog(BuildContext context, Map<String, dynamic> data) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        double rating = 5;
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1A2522),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+              side: const BorderSide(color: Colors.white12)),
+          title: Text("Rate Driver",
+              style: GoogleFonts.urbanist(
+                  color: Colors.white, fontWeight: FontWeight.bold)),
+          content: StatefulBuilder(
+            builder: (context, setDialogState) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Slider(
+                    activeColor: primaryTurquoise,
+                    inactiveColor: Colors.white12,
+                    value: rating,
+                    min: 1,
+                    max: 5,
+                    divisions: 4,
+                    label: rating.toString(),
+                    onChanged: (value) {
+                      setDialogState(() {
+                        rating = value;
+                      });
+                    },
+                  ),
+                  Text("${rating.toInt()} / 5 Stars",
+                      style: GoogleFonts.urbanist(
+                          color: Colors.white, fontWeight: FontWeight.bold)),
+                ],
+              );
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text("Cancel",
+                  style: GoogleFonts.urbanist(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                await firestore
+                    .collection('rides')
+                    .doc(currentRideId ?? data['rideId'])
+                    .update({
+                  'rating': rating.toInt(),
+                });
+                await rideService.updateDriverRating(
+                  driverId: data['driverId'],
+                );
+                Navigator.pop(context);
+              },
+              child: Text("Submit Rating",
+                  style: GoogleFonts.urbanist(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -1534,7 +1712,7 @@ Future<void> triggerMpesaStkPush({
     }
   } catch (e) {
     Navigator.pop(context);
-    print("M-Pesa Trigger Error: $e");
+    dev.log("RIDER_LOG: M-Pesa Trigger Error", error: e);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('❌ Failed to trigger M-Pesa prompt: $e'),

@@ -27,22 +27,24 @@ class PaymentService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         String invoiceId = data['invoice']['invoice_id'];
-        
+
         // 2. Start checking the status every 4 seconds (Long polling)
-        for (int i = 0; i < 20; i++) {
-          await Future.delayed(const Duration(seconds: 4));
-          
-          final statusCheck = await http.get(Uri.parse('$_backendUrl/payment-status/$invoiceId'));
+        for (int i = 0; i < 10; i++) {
+          await Future.delayed(const Duration(seconds: 3));
+
+          final statusCheck = await http
+              .get(Uri.parse('$_backendUrl/payment-status/$invoiceId'));
           if (statusCheck.statusCode == 200) {
             final statusData = jsonDecode(statusCheck.body);
-            String state = statusData['state']; // 'PENDING', 'PROCESSING', 'COMPLETED', or 'FAILED'
-            
-            if (state == 'COMPLETE' || state== 'COMPLETED'){ 
-              return 'COMPLETED'; 
-              }
-            if (state == 'FAILED' || state== 'REJECTED'){ 
-              return 'FAILED'; 
-              }
+            String state = statusData[
+                'state']; // 'PENDING', 'PROCESSING', 'COMPLETED', or 'FAILED'
+
+            if (state == 'COMPLETE' || state == 'COMPLETED') {
+              return 'COMPLETED';
+            }
+            if (state == 'FAILED' || state == 'REJECTED') {
+              return 'FAILED';
+            }
           }
         }
         return 'TIMEOUT';
