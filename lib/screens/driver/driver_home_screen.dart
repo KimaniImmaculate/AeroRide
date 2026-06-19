@@ -6,8 +6,7 @@ import 'dart:async';
 import '../history_screen.dart';
 import '../profile_screen.dart';
 import '../chat_screen.dart';
-import '../landing_screen.dart';
-
+import '../../gateway_portal.dart';
 
 import '../../services/user_service.dart';
 import '../../services/ride_service.dart';
@@ -163,7 +162,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     // Clear navigation stack tracking and return to landing page entry point
     Navigator.pushAndRemoveUntil(
       context,
-      MaterialPageRoute(builder: (context) => const LandingScreen()),
+      MaterialPageRoute(builder: (context) => const AeroRideGatewayPortal()),
       (route) => false,
     );
   } catch (e) {
@@ -1746,4 +1745,3 @@ if (ride['status'] != 'completed')
     );
   }
 }*/
-

@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart'; // ⚡ ADDED: To expose the state pipeline
 import 'firebase_options.dart';
 import 'gateway_portal.dart';
+import 'screens/auth/auth_gate.dart';
 import 'services/ride_service.dart'; // ⚡ ADDED: Imports the RideController you just modified
 
 void main() async {
@@ -40,7 +41,7 @@ class AeroRideApp extends StatelessWidget {
           brightness: Brightness.light,
         ),
       ),
-      home: const AeroRideGatewayPortal(),
+      home: const AuthGate(),
     );
   }
 }

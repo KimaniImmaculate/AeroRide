@@ -17,8 +17,9 @@ import 'package:flutter/foundation.dart';
 import 'dart:js_interop';
 import 'dart:developer' as dev;
 import 'dart:js_interop_unsafe';
-import '../landing_screen.dart';
+import '../../gateway_portal.dart';
 import '../../services/payment_service.dart';
+import '../auth/Login_screen.dart';
 
 class RiderHomeScreen extends StatefulWidget {
   const RiderHomeScreen({super.key});
@@ -69,8 +70,23 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   @override
   void initState() {
     super.initState();
+    _signInAnonymouslyIfNeeded();
     getCurrentLocation();
     _startDriverListener();
+  }
+
+  /// Signs in the user as a guest if they are not already logged in.
+  Future<void> _signInAnonymouslyIfNeeded() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) {
+      try {
+        await FirebaseAuth.instance.signInAnonymously();
+        dev.log("RIDER_LOG: Signed in anonymously.");
+      } catch (e) {
+        dev.log("RIDER_LOG: Anonymous sign-in failed", error: e);
+      }
+    }
+    setState(() {}); // Refresh UI to reflect guest/user status
   }
 
   @override
@@ -226,7 +242,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
       // Clear navigation stack tracking and return to landing page entry point
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (context) => const LandingScreen()),
+        MaterialPageRoute(builder: (context) => const AeroRideGatewayPortal()),
         (route) => false,
       );
     } catch (e) {
@@ -576,6 +592,30 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   }
 
   Future<void> requestRide() async {
+    // --- AUTHENTICATION GATE ---
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null || currentUser.isAnonymous) {
+      dev.log(
+          "RIDER_LOG: Anonymous user attempting to book. Redirecting to login.");
+      if (!mounted) return;
+
+      // Navigate to the login screen and wait for a result.
+      final bool? loginSuccess = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(builder: (context) => const LoginScreen()),
+      );
+
+      // If login was successful, the user is now authenticated.
+      // We can refresh the state and proceed with the original request.
+      if (loginSuccess != true) {
+        dev.log("RIDER_LOG: Login was not successful. Aborting ride request.");
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Please log in to request a ride.")),
+        );
+        return;
+      }
+    }
+
     setState(() {
       isLoading = true;
     });
@@ -632,6 +672,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    final isGuest = currentUser == null || currentUser.isAnonymous;
     return Scaffold(
       backgroundColor: const Color(0xFF0F1715), // Deep dark base
       appBar: AppBar(
@@ -644,35 +686,43 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
         automaticallyImplyLeading: false,
         elevation: 0,
         centerTitle: true,
-        actions: [
-          IconButton(
-            onPressed: () {
-              Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const HistoryScreen()));
-            },
-            icon: const Icon(Icons.history_rounded, color: Colors.white70),
-            tooltip: "Ride History",
-          ),
-          IconButton(
-            onPressed: () {
-              Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const ProfileScreen()));
-            },
-            icon:
-                const Icon(Icons.account_circle_rounded, color: Colors.white70),
-            tooltip: "Profile Settings",
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: 8.0),
-            child: IconButton(
-              onPressed: () =>
-                  _handleLogout(context), // Triggers the sign-out method
-              icon: const Icon(Icons.logout_rounded, color: Colors.redAccent),
-              tooltip: "Log Out",
-            ),
-          ),
-          const SizedBox(width: 8),
-        ],
+        actions: isGuest
+            ? [] // Show no actions for guest users
+            : [
+                IconButton(
+                  onPressed: () {
+                    Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const HistoryScreen()));
+                  },
+                  icon:
+                      const Icon(Icons.history_rounded, color: Colors.white70),
+                  tooltip: "Ride History",
+                ),
+                IconButton(
+                  onPressed: () {
+                    Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const ProfileScreen()));
+                  },
+                  icon: const Icon(Icons.account_circle_rounded,
+                      color: Colors.white70),
+                  tooltip: "Profile Settings",
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(right: 8.0),
+                  child: IconButton(
+                    onPressed: () =>
+                        _handleLogout(context), // Triggers the sign-out method
+                    icon: const Icon(Icons.logout_rounded,
+                        color: Colors.redAccent),
+                    tooltip: "Log Out",
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
       ),
       // Move Chat to a dedicated prominent button on the bottom right
       floatingActionButton: currentRideId != null
@@ -1193,7 +1243,10 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                     ),
                     child: isLoading
                         ? const CircularProgressIndicator(color: Colors.white)
-                        : Text("Confirm & Request Ride",
+                        : Text(
+                            isGuest
+                                ? "Login to Request Ride"
+                                : "Confirm & Request Ride",
                             style: GoogleFonts.urbanist(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
@@ -1638,86 +1691,6 @@ class _TripActionButton extends StatelessWidget {
                     color: Colors.white, fontWeight: FontWeight.bold)),
           ],
         ),
-      ),
-    );
-  }
-}
-
-InputDecoration _inputDecoration(String label, IconData icon, Color iconColor) {
-  return InputDecoration(
-    labelText: label,
-    labelStyle:
-        GoogleFonts.urbanist(color: Colors.white.withValues(alpha: 0.4)),
-    prefixIcon: Icon(icon, color: iconColor),
-    filled: true,
-    fillColor: Colors.black.withValues(alpha: 0.2),
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-    focusedBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(14),
-      borderSide: const BorderSide(color: Color(0xFF16A085), width: 2),
-    ),
-  );
-}
-
-Future<void> triggerMpesaStkPush({
-  required BuildContext context,
-  required String phoneNumber,
-  required double amount,
-  required String rideId,
-}) async {
-  showDialog(
-    context: context,
-    barrierDismissible: false,
-    builder: (context) => const Center(
-      child: Card(
-        child: Padding(
-          padding: EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CircularProgressIndicator(color: Colors.green),
-              SizedBox(height: 16),
-              Text("Sending M-Pesa STK Prompt...",
-                  style: TextStyle(fontWeight: FontWeight.w500)),
-              SizedBox(height: 4),
-              Text("Complete processing authorization on phone",
-                  style: TextStyle(fontSize: 12, color: Colors.grey)),
-            ],
-          ),
-        ),
-      ),
-    ),
-  );
-
-  try {
-    final HttpsCallable callable =
-        FirebaseFunctions.instance.httpsCallable('initiateStkPush');
-    final response = await callable.call({
-      'phoneNumber': phoneNumber,
-      'amount': amount,
-      'rideId': rideId,
-    });
-
-    Navigator.pop(context);
-
-    if (response.data['success'] == true) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content:
-              Text('📱 M-Pesa Prompt sent successfully! Check your phone.'),
-          backgroundColor: Colors.green,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
-  } catch (e) {
-    Navigator.pop(context);
-    dev.log("RIDER_LOG: M-Pesa Trigger Error", error: e);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('❌ Failed to trigger M-Pesa prompt: $e'),
-        backgroundColor: Colors.red,
-        behavior: SnackBarBehavior.floating,
       ),
     );
   }

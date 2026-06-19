@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'dart:ui';
 import 'package:aeroride/screens/auth/Login_screen.dart';
+import 'package:aeroride/screens/rider/rider_home_screen.dart';
 
 class AeroRideGatewayPortal extends StatefulWidget {
   const AeroRideGatewayPortal({super.key});
@@ -155,7 +156,7 @@ class _AeroRideGatewayPortalState extends State<AeroRideGatewayPortal>
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                              builder: (context) => const LoginScreen()),
+                              builder: (context) => const RiderHomeScreen()),
                         );
                       },
                     ),

@@ -6,7 +6,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../services/auth_service.dart';
 import '../../services/role_service.dart';
 import '../driver/driver_home_screen.dart';
-import '../rider/rider_home_screen.dart';
 import '../admin/admin_dashboard.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -42,7 +41,15 @@ class _LoginScreenState extends State<LoginScreen> {
     await FirebaseAuth.instance.verifyPhoneNumber(
       phoneNumber: formattedPhone,
       verificationCompleted: (PhoneAuthCredential credential) async {
-        await FirebaseAuth.instance.signInWithCredential(credential);
+        try {
+          await FirebaseAuth.instance.currentUser?.linkWithCredential(credential);
+        } on FirebaseAuthException catch (linkError) {
+          if (linkError.code != 'provider-already-linked' &&
+              linkError.code != 'credential-already-in-use' &&
+              linkError.code != 'account-exists-with-different-credential') {
+            debugPrint("Verification completed auto-link error: $linkError");
+          }
+        }
       },
       verificationFailed: (FirebaseAuthException e) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -164,8 +171,16 @@ class _LoginScreenState extends State<LoginScreen> {
                     smsCode: otpController.text.trim(),
                   );
 
-                  // Complete the verification block check
-                  await FirebaseAuth.instance.signInWithCredential(credential);
+                  // Complete the verification block check by linking the credential to the current user session
+                  try {
+                    await FirebaseAuth.instance.currentUser?.linkWithCredential(credential);
+                  } on FirebaseAuthException catch (linkError) {
+                    if (linkError.code != 'provider-already-linked' &&
+                        linkError.code != 'credential-already-in-use' &&
+                        linkError.code != 'account-exists-with-different-credential') {
+                      rethrow;
+                    }
+                  }
 
                   if (!mounted) return;
                   Navigator.pop(context); // Close dialog
@@ -177,29 +192,30 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   );
 
-                  // 🌟 Successfully verified! Route directly to the home dashboards safely
+                  // 🌟 Successfully verified! Route based on role.
                   if (role == 'admin') {
-                    Navigator.pushReplacement(
+                    Navigator.pushAndRemoveUntil(
                         context,
                         MaterialPageRoute(
-                            builder: (_) => const AdminDashboard()));
+                            builder: (_) => const AdminDashboard()),
+                        (route) => false);
                   } else if (role == 'driver') {
-                    Navigator.pushReplacement(
+                    Navigator.pushAndRemoveUntil(
                         context,
                         MaterialPageRoute(
-                            builder: (_) => const DriverHomeScreen()));
+                            builder: (_) => const DriverHomeScreen()),
+                        (route) => false);
                   } else {
-                    Navigator.pushReplacement(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => const RiderHomeScreen()));
+                    // For riders, pop the screen to return to the map with coordinates preserved.
+                    Navigator.of(context).pop(true);
                   }
                 } catch (e) {
+                  debugPrint("OTP Verification Error: $e");
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                         backgroundColor: Colors.red,
                         content: Text(
-                            "Incorrect OTP code. Authentication Failed.",
+                            "Error: $e",
                             style: GoogleFonts.urbanist(color: Colors.white))),
                   );
                 }
@@ -257,15 +273,20 @@ class _LoginScreenState extends State<LoginScreen> {
             isLoading = false;
           });
           if (!mounted) return;
+          // Fallback for no 2FA: Route based on role.
           if (role == 'admin') {
-            Navigator.pushReplacement(context,
-                MaterialPageRoute(builder: (_) => const AdminDashboard()));
+            Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const AdminDashboard()),
+                (route) => false);
           } else if (role == 'driver') {
-            Navigator.pushReplacement(context,
-                MaterialPageRoute(builder: (_) => const DriverHomeScreen()));
+            Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const DriverHomeScreen()),
+                (route) => false);
           } else {
-            Navigator.pushReplacement(context,
-                MaterialPageRoute(builder: (_) => const RiderHomeScreen()));
+            // For riders, pop the screen to return to the map with coordinates preserved.
+            Navigator.of(context).pop(true);
           }
         }
       } catch (e) {
