@@ -8,7 +8,8 @@ import 'gateway_portal.dart';
 
 class VehicleSelectionScreen extends StatefulWidget {
   final User user;
-  const VehicleSelectionScreen({super.key, required this.user});
+  final double distanceKm;
+  const VehicleSelectionScreen({super.key, required this.user, required this.distanceKm});
 
   @override
   State<VehicleSelectionScreen> createState() => _VehicleSelectionScreenState();
@@ -83,7 +84,7 @@ class _VehicleSelectionScreenState extends State<VehicleSelectionScreen> {
                       Navigator.of(context)
                           .pop(); // Clear out the dialog bubble frame overlay
                       Navigator.of(context)
-                          .pop(); // Back out safely into primary layout layer view stack
+                          .pop(true); // Back out safely returning true
                     },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: primaryTurquoise,
@@ -206,6 +207,7 @@ class _VehicleSelectionScreenState extends State<VehicleSelectionScreen> {
                               _selectedTier?.id == _availableTiers[index].id,
                           onSelected: (tier) =>
                               setState(() => _selectedTier = tier),
+                          distanceKm: widget.distanceKm,
                         );
                       },
                     ),
@@ -278,11 +280,13 @@ class _AeroVibeCard extends StatefulWidget {
   final VehicleTier tier;
   final bool isSelected;
   final Function(VehicleTier) onSelected;
+  final double distanceKm;
 
   const _AeroVibeCard({
     required this.tier,
     required this.isSelected,
     required this.onSelected,
+    required this.distanceKm,
   });
 
   @override
@@ -331,6 +335,7 @@ class _AeroVibeCardState extends State<_AeroVibeCard> {
 
   Widget _buildFrontSurface() {
     const Color primaryTurquoise = Color(0xFF16a085);
+    final double estimatedTotal = widget.tier.baseFare + (widget.distanceKm * widget.tier.perKmRate);
     return Container(
       constraints: const BoxConstraints(minHeight: 130),
       padding: const EdgeInsets.all(20),
@@ -373,6 +378,15 @@ class _AeroVibeCardState extends State<_AeroVibeCard> {
                     color: widget.isSelected ? Colors.white70 : Colors.black54,
                   ),
                 ),
+                const SizedBox(height: 6),
+                Text(
+                  "Est. Fare: KES ${estimatedTotal.toStringAsFixed(0)}",
+                  style: GoogleFonts.urbanist(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: widget.isSelected ? Colors.white : primaryTurquoise,
+                  ),
+                ),
               ],
             ),
           ),
@@ -391,6 +405,7 @@ class _AeroVibeCardState extends State<_AeroVibeCard> {
 
   Widget _buildBackSurface() {
     const Color primaryTurquoise = Color(0xFF16a085);
+    final double estimatedTotal = widget.tier.baseFare + (widget.distanceKm * widget.tier.perKmRate);
     return Container(
       constraints: const BoxConstraints(minHeight: 130),
       padding: const EdgeInsets.all(16),
@@ -426,6 +441,8 @@ class _AeroVibeCardState extends State<_AeroVibeCard> {
                   "KES ${widget.tier.baseFare.toStringAsFixed(0)}"),
               _buildPriceMetric("KM RATE",
                   "KES ${widget.tier.perKmRate.toStringAsFixed(0)}/KM"),
+              _buildPriceMetric("TOTAL EST.",
+                  "KES ${estimatedTotal.toStringAsFixed(0)}"),
             ],
           ),
         ],

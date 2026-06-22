@@ -18,6 +18,181 @@
   <link rel="manifest" href="manifest.json">
 
 <script async src="https://maps.googleapis.com/maps/api/js?key=AIzaSyANuwPwm1dRFvh_ySIIiW22-dWnUsMrp0k&libraries=geometry&loading=async"></script>  <script src="directions.js"></script>
+  <!-- Puter.js SDK and Custom voice-input automation loop -->
+  <script src="https://js.puter.com/v2/"></script>
+  <script>
+    // Helper to geocode an address string to coordinates using Google Geocoder API
+    const geocodeAddress = (address) => {
+      return new Promise((resolve) => {
+        if (typeof aerorideWaitForGoogleMaps !== 'function') {
+          console.warn("[Puter JS Geocoder] aerorideWaitForGoogleMaps function is not defined.");
+          resolve(null);
+          return;
+        }
+        aerorideWaitForGoogleMaps(100, function(isReady) {
+          if (!isReady) {
+            console.warn("[Puter JS Geocoder] Google Maps script is not ready.");
+            resolve(null);
+            return;
+          }
+          if (!window.google || !window.google.maps || !window.google.maps.Geocoder) {
+            console.warn("[Puter JS Geocoder] Google Maps Geocoder is not loaded.");
+            resolve(null);
+            return;
+          }
+          var geocoder = new google.maps.Geocoder();
+          geocoder.geocode({ address: address }, function(results, status) {
+            if (status === 'OK' && results[0]) {
+              resolve({
+                formatted_address: results[0].formatted_address,
+                lat: results[0].geometry.location.lat(),
+                lng: results[0].geometry.location.lng()
+              });
+            } else {
+              console.warn(`[Puter JS Geocoder] Geocode failed for "${address}" with status:`, status);
+              resolve(null);
+            }
+          });
+        });
+      });
+    };
+
+    window.processVoiceToIntent = async function(audioBlobUrl) {
+      console.log("[Puter JS Wrapper] Processing voice input from URL:", audioBlobUrl);
+      try {
+        if (!audioBlobUrl) {
+          throw new Error("Audio Blob URL is null or empty");
+        }
+
+        // 1. Resolve Blob from local URL if it's a blob url
+        let audioSource = audioBlobUrl;
+        if (audioBlobUrl.startsWith('blob:')) {
+          const response = await fetch(audioBlobUrl);
+          audioSource = await response.blob();
+        }
+
+        // 2. Transcribe & translate using Puter's Whisper integration
+        console.log("[Puter JS Wrapper] Invoking speech2txt with Whisper-1...");
+        const speechResult = await puter.ai.speech2txt(audioSource, {
+          model: 'whisper-1',
+          translate: true
+        });
+
+        const transcribedText = speechResult ? speechResult.text : "";
+        console.log("[Puter JS Wrapper] Transcribed text:", transcribedText);
+        if (!transcribedText || transcribedText.trim() === "") {
+          throw new Error("Empty transcription result returned from speech2txt.");
+        }
+
+        // 3. Process transcription to structured JSON using gemini-2.5-flash-lite
+        const systemPrompt = "You are a local transit assistant. Extract the transit details from the text. Respond ONLY with a valid JSON object containing \"origin\" and \"destination\" keys, and nothing else. No markdown formatting, no backticks, no markdown codeblocks. Example: {\"origin\": \"Main Street Station\", \"destination\": \"Broadway Mall\"}";
+
+        console.log("[Puter JS Wrapper] Invoking chat with gemini-2.5-flash-lite...");
+        const chatResponse = await puter.ai.chat([
+          { role: "system", content: systemPrompt },
+          { role: "user", content: transcribedText }
+        ], {
+          model: 'gemini-2.5-flash-lite'
+        });
+
+        // Resolve text content from chatResponse
+        let chatText = "";
+        if (typeof chatResponse === 'string') {
+          chatText = chatResponse;
+        } else if (chatResponse && chatResponse.message && chatResponse.message.content) {
+          chatText = chatResponse.message.content;
+        } else if (chatResponse && chatResponse.text) {
+          chatText = chatResponse.text;
+        } else {
+          throw new Error("Unexpected chat response structure from Puter.");
+        }
+
+        // Clean codeblocks if the LLM outputted them despite instructions
+        console.log("[Puter JS Wrapper] Chat model raw output:", chatText);
+        chatText = chatText.replace(/```json/g, "").replace(/```/g, "").trim();
+
+        // Validate that it is parseable JSON and has correct keys
+        const parsed = JSON.parse(chatText);
+        if (!parsed.origin || !parsed.destination) {
+          throw new Error("Returned JSON is missing 'origin' or 'destination' key.");
+        }
+
+        // 4. Geocode addresses to coordinates
+        console.log("[Puter JS Wrapper] Geocoding origin and destination to coordinates...");
+        const originGeo = await geocodeAddress(parsed.origin);
+        const destGeo = await geocodeAddress(parsed.destination);
+
+        if (!originGeo || !destGeo) {
+          throw new Error("Failed to find the specified pickup or destination locations on the map.");
+        }
+
+        const enriched = {
+          origin: originGeo.formatted_address,
+          origin_lat: originGeo.lat,
+          origin_lng: originGeo.lng,
+          destination: destGeo.formatted_address,
+          destination_lat: destGeo.lat,
+          destination_lng: destGeo.lng
+        };
+
+        console.log("[Puter JS Wrapper] Voice extraction successful:", enriched);
+        return JSON.stringify(enriched);
+      } catch (error) {
+        console.error("[Puter JS Wrapper] Error encountered in pipeline:", error);
+        return JSON.stringify({
+          error: error.message || "Unknown error processing speech context"
+        });
+      }
+    };
+
+    // Native Web Recording APIs
+    let mediaRecorder;
+    let audioChunks = [];
+
+    window.aerorideStartRecording = async function() {
+      console.log("[Puter JS Recorder] Starting audio recording...");
+      audioChunks = [];
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorder = new MediaRecorder(stream);
+      mediaRecorder.ondataavailable = event => {
+        if (event.data.size > 0) {
+          audioChunks.push(event.data);
+        }
+      };
+      mediaRecorder.start();
+    };
+
+    window.aerorideStopRecording = function() {
+      console.log("[Puter JS Recorder] Stopping audio recording...");
+      return new Promise((resolve, reject) => {
+        if (!mediaRecorder) {
+          reject("No active media recorder found.");
+          return;
+        }
+        mediaRecorder.onstop = () => {
+          const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+          const audioUrl = URL.createObjectURL(audioBlob);
+          // Stop mic capture tracks to release hardware
+          mediaRecorder.stream.getTracks().forEach(track => track.stop());
+          console.log("[Puter JS Recorder] Audio captured: ", audioUrl);
+          resolve(audioUrl);
+        };
+        mediaRecorder.stop();
+      });
+    };
+
+    // Text-to-Speech API
+    window.aerorideSpeak = function(text) {
+      console.log("[Puter JS TTS] Speaking: ", text);
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel(); // cancel any active speech
+        const utterance = new SpeechSynthesisUtterance(text);
+        window.speechSynthesis.speak(utterance);
+      } else {
+        console.warn("[Puter JS TTS] Speech synthesis is not supported on this browser.");
+      }
+    };
+  </script>
 </head>
 <body>
   <div id="recaptcha-container" style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 999999; background-color: white; border-radius: 4px; box-shadow: 0px 4px 10px rgba(0,0,0,0.2);"></div>  

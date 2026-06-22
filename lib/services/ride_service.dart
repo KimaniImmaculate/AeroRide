@@ -1,6 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter/material.dart'; // Added for ChangeNotifier support
 
@@ -11,15 +10,21 @@ class RideService {
     required String pickup,
     required String destination,
     required double fare,
+    required String rideTier,
   }) async {
     print("Entered requestRide");
+    final currentUser = FirebaseAuth.instance.currentUser;
 
     final rideRef = await firestore.collection('rides').add({
       'pickup': pickup,
       'destination': destination,
-      'status': 'pending',
+      'status': 'searching',
       'fare': fare.round(),
+      'estimatedFare': fare.round(),
+      'rideTier': rideTier,
       'createdAt': Timestamp.now(),
+      'riderId': currentUser?.uid,
+      'riderEmail': currentUser?.email,
     });
     print("Ride document created");
     return rideRef.id;
@@ -52,31 +57,52 @@ class RideService {
   Future<void> completeRide({
     required String rideId,
   }) async {
-    await firestore.collection('rides').doc(rideId).update({
-      'status': 'completed',
-      'paymentStatus': 'pending',
-      'paymentMethod': 'M-Pesa',
-      'completedAt': Timestamp.now(),
-    });
-
     final rideDoc = await firestore.collection('rides').doc(rideId).get();
     final rideData = rideDoc.data();
 
     if (rideData != null) {
       final driverId = rideData['driverId'];
       final fare = double.tryParse(rideData['fare'].toString()) ?? 0;
+      final driverEarnings = fare * 0.75;
+      final platformFee = fare * 0.25;
 
-      final driverDoc = await firestore.collection('users').doc(driverId).get();
-      double currentEarnings = 0;
-
-      if (driverDoc.data() != null && driverDoc.data()!['earnings'] != null) {
-        currentEarnings =
-            double.tryParse(driverDoc.data()!['earnings'].toString()) ?? 0;
-      }
-
-      await firestore.collection('users').doc(driverId).update({
-        'earnings': currentEarnings + fare,
+      await firestore.collection('rides').doc(rideId).update({
+        'status': 'completed',
+        'paymentStatus': 'pending',
+        'paymentMethod': 'M-Pesa',
+        'completedAt': Timestamp.now(),
+        'driverEarnings': driverEarnings,
+        'platformFee': platformFee,
       });
+
+      if (driverId != null) {
+        final driverDoc = await firestore.collection('users').doc(driverId).get();
+        double currentEarnings = 0;
+        double currentPlatformEarnings = 0;
+        int currentTotalTrips = 0;
+
+        final driverData = driverDoc.data();
+        if (driverData != null) {
+          if (driverData['earnings'] != null) {
+            currentEarnings =
+                double.tryParse(driverData['earnings'].toString()) ?? 0;
+          }
+          if (driverData['platformEarnings'] != null) {
+            currentPlatformEarnings =
+                double.tryParse(driverData['platformEarnings'].toString()) ?? 0;
+          }
+          if (driverData['totalTrips'] != null) {
+            currentTotalTrips =
+                int.tryParse(driverData['totalTrips'].toString()) ?? 0;
+          }
+        }
+
+        await firestore.collection('users').doc(driverId).update({
+          'earnings': currentEarnings + driverEarnings,
+          'platformEarnings': currentPlatformEarnings + platformFee,
+          'totalTrips': currentTotalTrips + 1,
+        });
+      }
     }
   }
 

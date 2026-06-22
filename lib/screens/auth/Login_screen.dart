@@ -7,9 +7,11 @@ import '../../services/auth_service.dart';
 import '../../services/role_service.dart';
 import '../driver/driver_home_screen.dart';
 import '../admin/admin_dashboard.dart';
+import '../rider/rider_home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  final String? expectedRole;
+  const LoginScreen({super.key, this.expectedRole});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -192,23 +194,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   );
 
-                  // 🌟 Successfully verified! Route based on role.
-                  if (role == 'admin') {
-                    Navigator.pushAndRemoveUntil(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => const AdminDashboard()),
-                        (route) => false);
-                  } else if (role == 'driver') {
-                    Navigator.pushAndRemoveUntil(
-                        context,
-                        MaterialPageRoute(
-                            builder: (_) => const DriverHomeScreen()),
-                        (route) => false);
-                  } else {
-                    // For riders, pop the screen to return to the map with coordinates preserved.
-                    Navigator.of(context).pop(true);
-                  }
+                  // Route based on role after 2FA verified.
+                  _navigateByRole(role, isRiderSubFlow: true);
                 } catch (e) {
                   debugPrint("OTP Verification Error: $e");
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -230,6 +217,57 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
+  /// Central role-based routing. Always navigates definitively — never
+  /// leaves the user stranded on the login screen after a successful auth.
+  ///
+  /// [isRiderSubFlow] — true when LoginScreen was pushed as a sub-flow from
+  /// the RiderHomeScreen's anonymous guard (so we pop instead of push, to
+  /// preserve the rider's already-entered coordinates).
+  void _navigateByRole(String? role, {bool isRiderSubFlow = false}) {
+    if (!mounted) return;
+
+    if (role == 'admin') {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => const AdminDashboard()),
+        (route) => false,
+      );
+    } else if (role == 'driver') {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => const DriverHomeScreen()),
+        (route) => false,
+      );
+    } else if (role == 'rider') {
+      if (isRiderSubFlow && Navigator.of(context).canPop()) {
+        // Pop back to RiderHomeScreen so the pre-entered coordinates are kept.
+        Navigator.of(context).pop(true);
+      } else {
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const RiderHomeScreen()),
+          (route) => false,
+        );
+      }
+    } else {
+      // Unknown or null role — show a clear error instead of silently routing
+      // to the wrong dashboard.
+      setState(() => isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: Colors.orange.shade800,
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            role == null
+                ? "Your account role is not set. Please contact support."
+                : "Unrecognised role '$role'. Please contact support.",
+            style: GoogleFonts.urbanist(color: Colors.white),
+          ),
+        ),
+      );
+    }
+  }
+
   Future<void> login() async {
     setState(() {
       isLoading = true;
@@ -247,6 +285,25 @@ class _LoginScreenState extends State<LoginScreen> {
             .collection('users')
             .doc(user.uid)
             .get();
+        final data = userDoc.data() as Map<String, dynamic>?;
+        bool isFlagged = data?['isFlagged'] ?? false;
+
+        if (isFlagged) {
+          await FirebaseAuth.instance.signOut();
+          setState(() {
+            isLoading = false;
+          });
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              backgroundColor: Colors.red,
+              behavior: SnackBarBehavior.floating,
+              content: Text("This account has been suspended for violating terms."),
+            ),
+          );
+          return;
+        }
+
         String? role = await roleService.getUserRole(user.uid);
 
         // Grab phone number from database map data
@@ -263,31 +320,17 @@ class _LoginScreenState extends State<LoginScreen> {
               setState(() {
                 isLoading = false;
               });
-              show2FaOtpDialog(verificationId,
-                  role ?? 'rider'); // Present popup challenge validation field
+              show2FaOtpDialog(verificationId, role ?? 'rider');
             },
           );
         } else {
-          // Fallback option if user profile has no phone key attached yet
-          setState(() {
-            isLoading = false;
-          });
+          // Fallback: no 2FA phone on profile — route directly by role.
+          setState(() => isLoading = false);
           if (!mounted) return;
-          // Fallback for no 2FA: Route based on role.
-          if (role == 'admin') {
-            Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(builder: (_) => const AdminDashboard()),
-                (route) => false);
-          } else if (role == 'driver') {
-            Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(builder: (_) => const DriverHomeScreen()),
-                (route) => false);
-          } else {
-            // For riders, pop the screen to return to the map with coordinates preserved.
-            Navigator.of(context).pop(true);
-          }
+          // isRiderSubFlow=true: if a rider was already on the Rider Dashboard
+          // (anonymous) and the login was triggered by requestRide(), we pop
+          // back so the coordinates they entered are preserved.
+          _navigateByRole(role, isRiderSubFlow: true);
         }
       } catch (e) {
         setState(() {
@@ -567,7 +610,11 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       const SizedBox(height: 24),
                       Text(
-                        "Welcome to AeroRide",
+                        widget.expectedRole == 'admin' 
+                            ? "Admin Portal Login" 
+                            : widget.expectedRole == 'driver' 
+                                ? "Driver Portal Login" 
+                                : "Welcome to AeroRide",
                         style: GoogleFonts.urbanist(
                           fontSize: 26,
                           fontWeight: FontWeight.bold,
@@ -577,7 +624,9 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        "Sign in to your account to continue",
+                        widget.expectedRole != null 
+                            ? "Sign in to your ${widget.expectedRole} account"
+                            : "Sign in to your account to continue",
                         style: GoogleFonts.urbanist(
                           fontSize: 14,
                           color: Colors.white.withValues(alpha: 0.5),
@@ -719,7 +768,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (context) => const RegisterScreen(),
+                              builder: (context) => RegisterScreen(expectedRole: widget.expectedRole),
                             ),
                           );
                         },

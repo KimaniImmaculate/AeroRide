@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
-import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:intl/intl.dart';
 
 class HistoryScreen extends StatelessWidget {
-  const HistoryScreen({super.key});
+  final bool isDriver;
+  const HistoryScreen({super.key, this.isDriver = false});
 
   static const Color primaryTurquoise = Color(0xFF16A085);
 
@@ -78,6 +79,12 @@ class HistoryScreen extends StatelessWidget {
                       itemBuilder: (context, index) {
                         final ride = rides[index];
                         final data = ride.data() as Map<String, dynamic>;
+                        
+                        String dateStr = "Unknown Date";
+                        if (data['createdAt'] != null) {
+                          final dt = (data['createdAt'] as Timestamp).toDate();
+                          dateStr = DateFormat('MMM d, yyyy • h:mm a').format(dt);
+                        }
 
                         return Card(
                           elevation: 0,
@@ -109,6 +116,13 @@ class HistoryScreen extends StatelessWidget {
                                             fontSize: 11,
                                             fontWeight: FontWeight.bold),
                                       ),
+                                    ),
+                                    Text(
+                                      dateStr,
+                                      style: TextStyle(
+                                          color: Colors.grey.shade600,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600),
                                     ),
                                     if (data['rating'] != null)
                                       Row(
@@ -194,12 +208,28 @@ class HistoryScreen extends StatelessWidget {
                                         ],
                                       ),
                                     ),
-                                    Text(
-                                      "KES ${data['fare'] ?? '0'}",
-                                      style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 16,
-                                          color: Colors.black87),
+                                    Column(
+                                      crossAxisAlignment: CrossAxisAlignment.end,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          "KES ${data['fare'] ?? '0'}",
+                                          style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 16,
+                                              color: Colors.black87),
+                                        ),
+                                        if (isDriver) ...[
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            "You earn: KES ${(data['driverEarnings'] ?? ((data['fare'] ?? 0) * 0.75)).toStringAsFixed(0)}",
+                                            style: TextStyle(
+                                                fontSize: 11,
+                                                color: Colors.grey.shade600,
+                                                fontWeight: FontWeight.w500),
+                                          ),
+                                        ],
+                                      ],
                                     ),
                                   ],
                                 ),

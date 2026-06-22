@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../services/ride_service.dart';
+import '../../vehicle_selection_screen.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -19,6 +21,7 @@ import 'dart:developer' as dev;
 import 'dart:js_interop_unsafe';
 import '../../gateway_portal.dart';
 import '../../services/payment_service.dart';
+import '../../services/voice_booking_handler.dart';
 import '../auth/Login_screen.dart';
 
 class RiderHomeScreen extends StatefulWidget {
@@ -61,6 +64,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   String? currentRideId;
   bool selectingPickup = false;
   String? _lastAlertedStatus;
+  bool isRecordingVoice = false;
+  bool isVoiceProcessing = false;
+  String voiceLanguageCode = 'en-US';
 
   final CameraPosition initialPosition = const CameraPosition(
     target: LatLng(-0.3031, 36.0800),
@@ -310,6 +316,12 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
       pickupController.text = pickupName;
       _syncMarkers();
     });
+    
+    if (mapController != null && pickupLocation != null) {
+      mapController!.animateCamera(
+        CameraUpdate.newLatLngZoom(pickupLocation!, 15),
+      );
+    }
   }
 
   Future<String> getPlaceName(double latitude, double longitude) async {
@@ -616,14 +628,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
       }
     }
 
-    setState(() {
-      isLoading = true;
-    });
     if (pickupLocation == null || destinationLocation == null) {
-      setState(() {
-        isLoading = false;
-      });
-
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text("Select destination on map"),
@@ -641,33 +646,388 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     );
 
     double distanceKm = distanceMeters / 1000;
-    double fare = distanceKm * 20;
-    dev.log("RIDER_LOG: Distance: $distanceKm km");
-    dev.log("RIDER_LOG: Fare: $fare");
 
-    final rideId = await rideService.requestRide(
-      pickup: pickupController.text.trim(),
-      destination: destinationController.text.trim(),
-      fare: fare,
-    );
-
-    currentRideId = rideId;
-
-    setState(() {
-      isLoading = false;
-    });
-
+    // Navigate to VehicleSelectionScreen to choose a tier
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("Ride Requested Successfully 🎉"),
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: Colors.green,
+    final bool? confirmed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => VehicleSelectionScreen(
+          user: FirebaseAuth.instance.currentUser!,
+          distanceKm: distanceKm,
+        ),
       ),
     );
 
-    pickupController.clear();
-    destinationController.clear();
+    if (confirmed != true) {
+      dev.log("RIDER_LOG: Vehicle selection cancelled by user.");
+      return;
+    }
+
+    setState(() {
+      isLoading = true;
+    });
+
+    try {
+      // Get the selected tier from RideController
+      final rideController = Provider.of<RideController>(context, listen: false);
+      final selectedTier = rideController.selectedTier;
+
+      if (selectedTier == null) {
+        throw Exception("No vehicle tier was selected.");
+      }
+
+      double fare = selectedTier.baseFare + (distanceKm * selectedTier.perKmRate);
+      dev.log("RIDER_LOG: Distance: $distanceKm km");
+      dev.log("RIDER_LOG: Selected Tier: ${selectedTier.id}, calculated fare: $fare");
+
+      final rideId = await rideService.requestRide(
+        pickup: pickupController.text.trim().isEmpty ? "Current Location" : pickupController.text.trim(),
+        destination: destinationController.text.trim().isEmpty ? "Selected Destination" : destinationController.text.trim(),
+        fare: fare,
+        rideTier: selectedTier.id,
+      );
+
+      currentRideId = rideId;
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Ride Requested Successfully 🎉"),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.green,
+        ),
+      );
+
+      pickupController.clear();
+      destinationController.clear();
+    } catch (e) {
+      dev.log("RIDER_LOG: Error requesting ride", error: e);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Failed to request ride: $e"),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
+      }
+    }
+  }
+
+  Widget _buildVoiceSearchButton() {
+    if (isVoiceProcessing) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: primaryTurquoise.withValues(alpha: 0.1),
+          shape: BoxShape.circle,
+        ),
+        child: const SizedBox(
+          width: 24,
+          height: 24,
+          child: CircularProgressIndicator(
+            color: primaryTurquoise,
+            strokeWidth: 2.5,
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Tooltip(
+          message: isRecordingVoice ? "Stop Recording" : "Voice Book (Speak Origin & Destination)",
+          child: GestureDetector(
+            onTap: _handleVoiceRecordingToggle,
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: isRecordingVoice ? Colors.redAccent : primaryTurquoise,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: (isRecordingVoice ? Colors.redAccent : primaryTurquoise)
+                        .withValues(alpha: 0.3),
+                    blurRadius: 8,
+                    spreadRadius: 2,
+                  )
+                ],
+              ),
+              child: Icon(
+                isRecordingVoice ? Icons.stop_rounded : Icons.mic_rounded,
+                color: Colors.white,
+                size: 24,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Tooltip(
+          message: voiceLanguageCode == 'en-US'
+              ? "Switch to Swahili"
+              : "Switch to English",
+          child: GestureDetector(
+            onTap: () {
+              setState(() {
+                voiceLanguageCode =
+                    voiceLanguageCode == 'en-US' ? 'sw-KE' : 'en-US';
+              });
+              AerorideVoiceHandler.speak(
+                voiceLanguageCode == 'en-US'
+                    ? "Language set to English."
+                    : "Lugha imebadilishwa kuwa Kiswahili.",
+                languageCode: voiceLanguageCode,
+              );
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 250),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: voiceLanguageCode == 'sw-KE'
+                    ? primaryTurquoise
+                    : const Color(0xFF1E3530),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: primaryTurquoise,
+                  width: 1.5,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: primaryTurquoise.withValues(alpha: 0.25),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Text(
+                voiceLanguageCode == 'en-US' ? "🇬🇧 EN" : "🇰🇪 SW",
+                style: TextStyle(
+                  color: voiceLanguageCode == 'sw-KE'
+                      ? Colors.white
+                      : primaryTurquoise,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _speakWithLanguage(String key, {String? val1, String? val2}) {
+    final isSwahili = voiceLanguageCode == 'sw-KE';
+    String text = "";
+    switch (key) {
+      case 'processing':
+        text = isSwahili 
+            ? "Tafadhali subiri, tunashughulikia ombi lako la safari."
+            : "Processing your voice booking request, please wait.";
+        break;
+      case 'decode_error':
+        text = isSwahili
+            ? "Pole, hatukuweza kuelewa maeneo yako. Tafadhali jaribu tena."
+            : "Sorry, we could not decode your locations. Please try again.";
+        break;
+      case 'general_error':
+        text = isSwahili
+            ? "Hitilafu imetokea wakati wa kushughulikia sauti."
+            : "An error occurred during voice processing.";
+        break;
+      case 'confirm_prompt':
+        text = isSwahili
+            ? "Tafadhali thibitisha ikiwa njia kutoka $val1 hadi $val2 ni sahihi."
+            : "Please confirm if the route from $val1 to $val2 is correct.";
+        break;
+      case 'booking_cancelled':
+        text = isSwahili
+            ? "Safari imeghairiwa."
+            : "Booking cancelled.";
+        break;
+      case 'booking_confirmed':
+        text = isSwahili
+            ? "Safari imethibitishwa. Ombi linatumwa."
+            : "Booking confirmed. Dispatching ride request.";
+        break;
+      case 'accepted':
+        text = isSwahili
+            ? "Dereva amekubali safari yako. Dereva $val1 anakuja."
+            : "Your ride request has been accepted. Driver $val1 is on the way.";
+        break;
+      case 'cancelled':
+        text = isSwahili
+            ? "Tahadhari. Safari yako imeghairiwa kwa sababu ya: $val1."
+            : "Alert. Your trip has been cancelled due to: $val1.";
+        break;
+      case 'started':
+        text = isSwahili
+            ? "Safari imeanza. Safari njema!"
+            : "Trip started successfully. Safe travels.";
+        break;
+      case 'completed':
+        text = isSwahili
+            ? "Safari imekamilika. Umefika."
+            : "Trip completed. You have arrived.";
+        break;
+    }
+    if (text.isNotEmpty) {
+      AerorideVoiceHandler.speak(text, languageCode: voiceLanguageCode);
+    }
+  }
+
+  Future<void> _handleVoiceRecordingToggle() async {
+    if (!kIsWeb) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Voice booking is only supported on Web.")),
+      );
+      return;
+    }
+
+    if (isRecordingVoice) {
+      // Stop recording and process voice
+      setState(() {
+        isRecordingVoice = false;
+        isVoiceProcessing = true;
+      });
+
+      try {
+        final audioUrl = await AerorideVoiceHandler.stopRecording();
+        _speakWithLanguage('processing');
+
+        final result = await AerorideVoiceHandler.decodeVoiceToIntent(audioUrl);
+
+        setState(() {
+          isVoiceProcessing = false;
+        });
+
+        if (result == null) {
+          _speakWithLanguage('decode_error');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text("Failed to parse transit locations. Please speak clearly."),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
+          return;
+        }
+
+        // Fill pickup and destination text fields
+        setState(() {
+          pickupController.text = result.origin;
+          destinationController.text = result.destination;
+          pickupLocation = LatLng(result.originLat, result.originLng);
+          destinationLocation = LatLng(result.destinationLat, result.destinationLng);
+        });
+
+        _syncMarkers();
+        await getRoute();
+
+        // Prompt the confirmation dialog
+        if (mounted) {
+          _showVoiceBookingConfirmation(result);
+        }
+      } catch (e) {
+        setState(() {
+          isVoiceProcessing = false;
+        });
+        _speakWithLanguage('general_error');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Error: ${e.toString()}")),
+          );
+        }
+      }
+    } else {
+      // Start recording
+      try {
+        await AerorideVoiceHandler.startRecording();
+        setState(() {
+          isRecordingVoice = true;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("🎙️ Listening... Speak your origin and destination, then tap the stop button."),
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 8),
+          ),
+        );
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Error starting voice recorder: ${e.toString()}")),
+          );
+        }
+      }
+    }
+  }
+
+  void _showVoiceBookingConfirmation(VoiceBookingResult result) {
+    _speakWithLanguage('confirm_prompt', val1: result.origin, val2: result.destination);
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1A2522),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+            side: const BorderSide(color: Colors.white24),
+          ),
+          title: Row(
+            children: const [
+              Icon(Icons.mic_rounded, color: primaryTurquoise),
+              SizedBox(width: 8),
+              Text("Confirm Route",
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text("Is this the correct route you want to book?",
+                  style: TextStyle(color: Colors.white70)),
+              const SizedBox(height: 16),
+              const Text("Pickup Location:", style: TextStyle(color: Colors.white38, fontSize: 12)),
+              Text(result.origin, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              const Text("Destination Drop-off:", style: TextStyle(color: Colors.white38, fontSize: 12)),
+              Text(result.destination, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _speakWithLanguage('booking_cancelled');
+              },
+              child: const Text("No", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _speakWithLanguage('booking_confirmed');
+                requestRide();
+              },
+              child: const Text("Yes, Book Ride", style: TextStyle(color: primaryTurquoise, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
@@ -788,6 +1148,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                       onTap: (LatLng position) async {
                         String placeName = await getPlaceName(
                             position.latitude, position.longitude);
+                        bool wasSelectingPickup = selectingPickup;
                         setState(() {
                           if (selectingPickup) {
                             pickupLocation = position;
@@ -799,6 +1160,13 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                           }
                           _syncMarkers();
                         });
+                        
+                        if (wasSelectingPickup && mapController != null) {
+                          mapController!.animateCamera(
+                            CameraUpdate.newLatLngZoom(position, 15),
+                          );
+                        }
+
                         if (pickupLocation != null &&
                             destinationLocation != null) {
                           getRoute();
@@ -817,95 +1185,103 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                     borderRadius: BorderRadius.circular(16)),
                 child: Padding(
                   padding: const EdgeInsets.all(16.0),
-                  child: Column(
+                  child: Row(
                     children: [
-                      TextField(
-                        controller: pickupController,
-                        readOnly: true,
-                        onTap: () {
-                          showModalBottomSheet(
-                            context: context,
-                            shape: const RoundedRectangleBorder(
-                              borderRadius: BorderRadius.vertical(
-                                  top: Radius.circular(20)),
-                            ),
-                            builder: (context) {
-                              return SafeArea(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const SizedBox(height: 8),
-                                    Container(
-                                        width: 40,
-                                        height: 4,
-                                        decoration: BoxDecoration(
-                                            color: Colors.grey.shade300,
-                                            borderRadius:
-                                                BorderRadius.circular(2))),
-                                    ListTile(
-                                      leading: const Icon(
-                                          Icons.my_location_rounded,
-                                          color: Colors.blue),
-                                      title: const Text("Use Current Location",
-                                          style: TextStyle(
-                                              fontWeight: FontWeight.w600)),
-                                      onTap: () {
-                                        Navigator.pop(context);
-                                        getCurrentLocation();
-                                      },
-                                    ),
-                                    ListTile(
-                                      leading: const Icon(Icons.map_rounded,
-                                          color: Colors.green),
-                                      title: const Text("Select point from Map",
-                                          style: TextStyle(
-                                              fontWeight: FontWeight.w600)),
-                                      onTap: () {
-                                        Navigator.pop(context);
-                                        selectingPickup = true;
-                                        ScaffoldMessenger.of(context)
-                                            .showSnackBar(
-                                          const SnackBar(
-                                            content: Text(
-                                                "Tap a pickup point on the map"),
-                                            behavior: SnackBarBehavior.floating,
+                      Expanded(
+                        child: Column(
+                          children: [
+                            TextField(
+                              controller: pickupController,
+                              readOnly: true,
+                              onTap: () {
+                                showModalBottomSheet(
+                                  context: context,
+                                  shape: const RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.vertical(
+                                        top: Radius.circular(20)),
+                                  ),
+                                  builder: (context) {
+                                    return SafeArea(
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const SizedBox(height: 8),
+                                          Container(
+                                              width: 40,
+                                              height: 4,
+                                              decoration: BoxDecoration(
+                                                  color: Colors.grey.shade300,
+                                                  borderRadius:
+                                                      BorderRadius.circular(2))),
+                                          ListTile(
+                                            leading: const Icon(
+                                                Icons.my_location_rounded,
+                                                color: Colors.blue),
+                                            title: const Text("Use Current Location",
+                                                style: TextStyle(
+                                                    fontWeight: FontWeight.w600)),
+                                            onTap: () {
+                                              Navigator.pop(context);
+                                              getCurrentLocation();
+                                            },
                                           ),
-                                        );
-                                      },
-                                    ),
-                                  ],
+                                          ListTile(
+                                            leading: const Icon(Icons.map_rounded,
+                                                color: Colors.green),
+                                            title: const Text("Select point from Map",
+                                                style: TextStyle(
+                                                    fontWeight: FontWeight.w600)),
+                                            onTap: () {
+                                              Navigator.pop(context);
+                                              selectingPickup = true;
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                const SnackBar(
+                                                  content: Text(
+                                                      "Tap a pickup point on the map"),
+                                                  behavior: SnackBarBehavior.floating,
+                                                ),
+                                              );
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                );
+                              },
+                              decoration: InputDecoration(
+                                labelText: "Pickup From",
+                                prefixIcon: const Icon(Icons.location_on,
+                                    color: Colors.green),
+                                filled: true,
+                                fillColor: Colors.grey.shade50,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide(color: Colors.grey.shade300),
                                 ),
-                              );
-                            },
-                          );
-                        },
-                        decoration: InputDecoration(
-                          labelText: "Pickup From",
-                          prefixIcon: const Icon(Icons.location_on,
-                              color: Colors.green),
-                          filled: true,
-                          fillColor: Colors.grey.shade50,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(color: Colors.grey.shade300),
-                          ),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            TextField(
+                              controller: destinationController,
+                              decoration: InputDecoration(
+                                labelText: "Drop-off Destination",
+                                prefixIcon: const Icon(Icons.flag_rounded,
+                                    color: Colors.redAccent),
+                                filled: true,
+                                fillColor: Colors.grey.shade50,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide(color: Colors.grey.shade300),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(height: 16),
-                      TextField(
-                        controller: destinationController,
-                        decoration: InputDecoration(
-                          labelText: "Drop-off Destination",
-                          prefixIcon: const Icon(Icons.flag_rounded,
-                              color: Colors.redAccent),
-                          filled: true,
-                          fillColor: Colors.grey.shade50,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(color: Colors.grey.shade300),
-                          ),
-                        ),
-                      ),
+                      const SizedBox(width: 12),
+                      _buildVoiceSearchButton(),
                     ],
                   ),
                 ),
@@ -945,7 +1321,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                     if (currentStatus != _lastAlertedStatus) {
                       _lastAlertedStatus =
                           currentStatus; // Lock state immediately
-                      _handleStatusNotifications(context, currentStatus);
+                      _handleStatusNotifications(context, currentStatus, data);
                     }
                   });
 
@@ -1023,6 +1399,52 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                                     fontSize: 14,
                                     height: 1.4),
                               ),
+                              const SizedBox(height: 16),
+                              if (data['paymentStatus'] != 'paid') ...[
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: ElevatedButton(
+                                    onPressed: () =>
+                                        _showPaymentForm(context, data),
+                                    style: ElevatedButton.styleFrom(
+                                        backgroundColor: primaryTurquoise,
+                                        shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(12))),
+                                    child: const Text("Pay Cancellation Fare",
+                                        style:
+                                            TextStyle(color: Colors.white)),
+                                  ),
+                                ),
+                              ] else ...[
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: const [
+                                    Icon(Icons.check_circle_rounded,
+                                        color: Colors.green),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      "Cancellation Fee Paid",
+                                      style: TextStyle(
+                                          color: Colors.green,
+                                          fontWeight: FontWeight.bold),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: TextButton(
+                                    onPressed: () {
+                                      setState(() {
+                                        currentRideId = null;
+                                      });
+                                    },
+                                    child: const Text("Book Another Ride",
+                                        style: TextStyle(color: Colors.white70)),
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                         ),
@@ -1099,26 +1521,123 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                         const SizedBox(height: 12),
                         // --- 4. DRIVER INFO ---
                         _ProfessionalCard(
-                          child: ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: const CircleAvatar(
-                                backgroundColor: primaryTurquoise,
-                                child: Icon(Icons.directions_car_filled_rounded,
-                                    color: Colors.white)),
-                            title: const Text("Assigned Driver",
-                                style: TextStyle(
-                                    color: Colors.white70, fontSize: 12)),
-                            subtitle: Text("${data['driverEmail']}",
-                                style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16)),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const CircleAvatar(
+                                    backgroundColor: primaryTurquoise,
+                                    child: Icon(
+                                        Icons.directions_car_filled_rounded,
+                                        color: Colors.white)),
+                                title: const Text("Assigned Driver",
+                                    style: TextStyle(
+                                        color: Colors.white70, fontSize: 12)),
+                                subtitle: Text("${data['driverEmail']}",
+                                    style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16)),
+                              ),
+                              if (data['driverId'] != null)
+                                FutureBuilder<DocumentSnapshot>(
+                                  future: firestore
+                                      .collection('users')
+                                      .doc(data['driverId'] as String)
+                                      .get(),
+                                  builder: (context, driverSnap) {
+                                    if (!driverSnap.hasData ||
+                                        !driverSnap.data!.exists) {
+                                      return const SizedBox.shrink();
+                                    }
+                                    final driverData = driverSnap.data!.data()
+                                        as Map<String, dynamic>;
+                                    final driverPhone =
+                                        driverData['phone'] as String?;
+                                    if (driverPhone == null ||
+                                        driverPhone.trim().isEmpty) {
+                                      return const SizedBox.shrink();
+                                    }
+                                    return Padding(
+                                      padding: const EdgeInsets.only(top: 4.0),
+                                      child: Row(
+                                        children: [
+                                          const Icon(Icons.phone_rounded,
+                                              color: primaryTurquoise, size: 16),
+                                          const SizedBox(width: 6),
+                                          Expanded(
+                                            child: Text(
+                                              driverPhone,
+                                              style: GoogleFonts.urbanist(
+                                                  color: Colors.white70,
+                                                  fontSize: 14),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          GestureDetector(
+                                            onTap: () {
+                                              // Launch phone dialer via tel: URI
+                                              final uri =
+                                                  Uri.parse('tel:$driverPhone');
+                                              // Use js interop to open on web
+                                              final window = globalContext
+                                                  .getProperty('window'.toJS);
+                                              if (window != null) {
+                                                (window as JSObject).callMethod(
+                                                    'open'.toJS,
+                                                    uri.toString().toJS);
+                                              }
+                                            },
+                                            child: Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 14,
+                                                      vertical: 8),
+                                              decoration: BoxDecoration(
+                                                color: primaryTurquoise
+                                                    .withValues(alpha: 0.18),
+                                                borderRadius:
+                                                    BorderRadius.circular(10),
+                                                border: Border.all(
+                                                    color: primaryTurquoise
+                                                        .withValues(alpha: 0.5),
+                                                    width: 1),
+                                              ),
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  const Icon(
+                                                      Icons.call_rounded,
+                                                      color: primaryTurquoise,
+                                                      size: 16),
+                                                  const SizedBox(width: 4),
+                                                  Text("Call Driver",
+                                                      style:
+                                                          GoogleFonts.urbanist(
+                                                              color:
+                                                                  primaryTurquoise,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .bold,
+                                                              fontSize: 13)),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                ),
+                            ],
                           ),
                         ),
                       ],
 
                       // --- 5. ACTION BAR (SOS & CANCEL RIDE) ---
-                      if (data['status'] == 'pending' ||
+                      if (data['status'] == 'searching' ||
+                          data['status'] == 'pending' ||
                           data['status'] == 'accepted' ||
                           data['status'] == 'started') ...[
                         const SizedBox(height: 16),
@@ -1220,6 +1739,21 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                                   ),
                                 ],
                               ),
+                              if (data['paymentStatus'] == 'paid') ...[
+                                const SizedBox(height: 16),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: TextButton(
+                                    onPressed: () {
+                                      setState(() {
+                                        currentRideId = null;
+                                      });
+                                    },
+                                    child: const Text("Book Another Ride",
+                                        style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                         ),
@@ -1260,8 +1794,14 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     );
   }
 
-  void _handleStatusNotifications(BuildContext context, String? currentStatus) {
+  void _handleStatusNotifications(
+      BuildContext context, String? currentStatus, Map<String, dynamic> data) {
     if (currentStatus == 'accepted') {
+      final driverEmail = data['driverEmail']?.toString() ?? 'assigned';
+      final emailPrefix = driverEmail.split('@')[0];
+      AerorideVoiceHandler.speak(
+          "Your ride request has been accepted. Driver $emailPrefix is on the way.");
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           backgroundColor: Colors.green,
@@ -1272,6 +1812,10 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
         ),
       );
     } else if (currentStatus == 'cancelled') {
+      final cancelReason = data['cancelReason']?.toString() ?? 'No specific reason';
+      AerorideVoiceHandler.speak(
+          "Alert. Your trip has been cancelled due to: $cancelReason.");
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           backgroundColor: Colors.red,
@@ -1282,6 +1826,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
         ),
       );
     } else if (currentStatus == 'started') {
+      AerorideVoiceHandler.speak("Trip started successfully. Safe travels.");
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           backgroundColor: Colors.blue,
@@ -1292,6 +1838,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
         ),
       );
     } else if (currentStatus == 'completed') {
+      AerorideVoiceHandler.speak("Trip completed. You have arrived.");
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           backgroundColor: Colors.purple,
@@ -1545,6 +2093,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                 await FirebaseFirestore.instance.collection('emergencies').add({
                   'type': 'SOS',
                   'userRole': 'rider',
+                  'userId': FirebaseAuth.instance.currentUser?.uid,
                   'message': note.isEmpty ? "No details provided" : note,
                   'createdAt': Timestamp.now(),
                   'status': 'active',

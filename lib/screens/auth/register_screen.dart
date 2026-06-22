@@ -4,7 +4,8 @@ import '../../services/auth_service.dart';
 import '../../services/user_service.dart';
 
 class RegisterScreen extends StatefulWidget {
-  const RegisterScreen({super.key});
+  final String? expectedRole;
+  const RegisterScreen({super.key, this.expectedRole});
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -24,6 +25,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   // AeroRide Turquoise Theme Color
   static const Color primaryTurquoise = Color(0xFF16A085);
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.expectedRole != null) {
+      selectedRole = widget.expectedRole!;
+    }
+  }
 
   @override
   void dispose() {
@@ -194,7 +203,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ),
                       const SizedBox(height: 24),
                       Text(
-                        "Create Account",
+                        widget.expectedRole == 'admin' 
+                            ? "Create Admin Account" 
+                            : widget.expectedRole == 'driver' 
+                                ? "Create Driver Account" 
+                                : "Create Account",
                         style: GoogleFonts.urbanist(
                           fontSize: 26,
                           fontWeight: FontWeight.bold,
@@ -322,59 +335,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ),
                       const SizedBox(height: 20),
 
-                      // Role Selector Menu
-                      DropdownButtonFormField<String>(
-                        value: selectedRole,
-                        style: GoogleFonts.urbanist(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500),
-                        dropdownColor: const Color(0xFF162220),
-                        decoration: InputDecoration(
-                          labelText: "Select System Role",
-                          labelStyle: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.4)),
-                          prefixIcon: const Icon(Icons.badge_outlined,
-                              color: primaryTurquoise),
-                          filled: true,
-                          fillColor: Colors.black.withValues(alpha: 0.25),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            borderSide: BorderSide(
-                                color: Colors.white.withValues(alpha: 0.08)),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            borderSide: BorderSide(
-                                color: Colors.white.withValues(alpha: 0.08)),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            borderSide: const BorderSide(
-                                color: primaryTurquoise, width: 2),
-                          ),
-                        ),
-                        items: [
-                          DropdownMenuItem(
-                            value: 'rider',
-                            child: Text('Rider Panelist',
-                                style:
-                                    GoogleFonts.urbanist(color: Colors.white)),
-                          ),
-                          DropdownMenuItem(
-                            value: 'driver',
-                            child: Text('Service Driver',
-                                style:
-                                    GoogleFonts.urbanist(color: Colors.white)),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          setState(() {
-                            selectedRole = value!;
-                          });
-                        },
-                      ),
-                      const SizedBox(height: 32),
+                      const SizedBox(height: 12),
 
                       // Primary Elevated Turquoise Button
                       SizedBox(

@@ -174,7 +174,7 @@ class _AeroRideGatewayPortalState extends State<AeroRideGatewayPortal>
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                              builder: (context) => const LoginScreen()),
+                              builder: (context) => const LoginScreen(expectedRole: 'driver')),
                         );
                       },
                     ),
@@ -193,7 +193,7 @@ class _AeroRideGatewayPortalState extends State<AeroRideGatewayPortal>
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                              builder: (context) => const LoginScreen()),
+                              builder: (context) => const LoginScreen(expectedRole: 'admin')),
                         );
                       },
                     ),

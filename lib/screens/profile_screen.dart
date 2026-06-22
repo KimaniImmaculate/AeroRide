@@ -24,6 +24,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String?
       profileImageUrl; // Holds either our base64 data string or standard string links
 
+  String? role;
+  String? licenseNumber;
+  String? bio;
+  String? documents;
+  String? passportPhotoUrl;
+
   // Vibrant Turquoise Theme Color
   static const Color primaryTurquoise = Color(0xFF16A085);
 
@@ -59,6 +65,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
         nameController.text = data['name'] ?? '';
         phoneController.text = data['phone'] ?? '';
         profileImageUrl = data['profilePicture'];
+        role = data['role'] ?? 'rider';
+        licenseNumber = data['licenseNumber'] ?? '';
+        bio = data['bio'] ?? '';
+        documents = data['documents'] ?? '';
+        passportPhotoUrl = data['passportPhotoUrl'] ?? '';
       }
     } catch (e) {
       if (!mounted) return;
@@ -339,6 +350,92 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               decoration: _glassInputDecoration(
                                   "Phone Number", Icons.phone_android_rounded),
                             ),
+                            if (role == 'driver') ...[
+                              const SizedBox(height: 20),
+                              if (passportPhotoUrl != null && passportPhotoUrl!.isNotEmpty) ...[
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withValues(alpha: 0.25),
+                                    borderRadius: BorderRadius.circular(14),
+                                    border: Border.all(color: Colors.white10),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        "Admin Passport Photo",
+                                        style: GoogleFonts.urbanist(
+                                          color: Colors.white60,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(10),
+                                        child: Image.network(
+                                          passportPhotoUrl!,
+                                          height: 120,
+                                          width: 120,
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (context, error, stackTrace) =>
+                                              const Icon(Icons.broken_image, color: Colors.white30, size: 40),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 20),
+                              ],
+                              TextFormField(
+                                key: ValueKey('license_$licenseNumber'),
+                                initialValue: licenseNumber,
+                                readOnly: true,
+                                style: GoogleFonts.urbanist(color: Colors.white70),
+                                decoration: _glassInputDecoration(
+                                    "Driver's License (Read-only)", Icons.card_membership_rounded),
+                              ),
+                              const SizedBox(height: 20),
+                              TextFormField(
+                                key: ValueKey('bio_$bio'),
+                                initialValue: bio,
+                                readOnly: true,
+                                style: GoogleFonts.urbanist(color: Colors.white70),
+                                decoration: _glassInputDecoration(
+                                    "Bio / Description (Read-only)", Icons.description_rounded),
+                              ),
+                              const SizedBox(height: 20),
+                              TextFormField(
+                                key: ValueKey('docs_$documents'),
+                                initialValue: documents,
+                                readOnly: true,
+                                style: GoogleFonts.urbanist(color: Colors.white70),
+                                decoration: _glassInputDecoration(
+                                    "Documents Link (Read-only)", Icons.folder_open_rounded),
+                              ),
+                              const SizedBox(height: 20),
+                              SizedBox(
+                                width: double.infinity,
+                                height: 48,
+                                child: OutlinedButton.icon(
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: primaryTurquoise,
+                                    side: const BorderSide(color: primaryTurquoise),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  onPressed: _showUpdateRequestDialog,
+                                  icon: const Icon(Icons.edit_note_rounded),
+                                  label: Text(
+                                    "Request Details Change",
+                                    style: GoogleFonts.urbanist(fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                              ),
+                            ],
                             const SizedBox(height: 32),
                             SizedBox(
                               width: double.infinity,
@@ -377,6 +474,114 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
               ),
             ),
+    );
+  }
+
+  void _showUpdateRequestDialog() {
+    final TextEditingController reasonController = TextEditingController();
+    final TextEditingController detailsController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF131D1A),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+            side: const BorderSide(color: Colors.white12),
+          ),
+          title: Text(
+            "Request Profile Update",
+            style: GoogleFonts.urbanist(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  "Explain what details you need updated (e.g. bio, documents, license, passport photo) and why. The admin will review it and reach out to you via email.",
+                  style: GoogleFonts.urbanist(
+                    color: Colors.white60,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: reasonController,
+                  style: GoogleFonts.urbanist(color: Colors.white),
+                  decoration: _glassInputDecoration(
+                    "Reason for Change",
+                    Icons.help_outline_rounded,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: detailsController,
+                  style: GoogleFonts.urbanist(color: Colors.white),
+                  maxLines: 4,
+                  decoration: _glassInputDecoration(
+                    "Update Details",
+                    Icons.edit_note_rounded,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(
+                "Cancel",
+                style: GoogleFonts.urbanist(color: Colors.grey),
+              ),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: primaryTurquoise,
+              ),
+              onPressed: () async {
+                String reason = reasonController.text.trim();
+                String details = detailsController.text.trim();
+                if (reason.isEmpty || details.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Please fill all fields")),
+                  );
+                  return;
+                }
+
+                await firestore.collection('driver_change_requests').add({
+                  'driverId': currentUser!.uid,
+                  'driverEmail': currentUser!.email,
+                  'reason': reason,
+                  'details': details,
+                  'requestedAt': FieldValue.serverTimestamp(),
+                  'status': 'pending',
+                });
+
+                if (!context.mounted) return;
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text("Update request submitted! Admin will email you."),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              },
+              child: Text(
+                "Submit Request",
+                style: GoogleFonts.urbanist(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 

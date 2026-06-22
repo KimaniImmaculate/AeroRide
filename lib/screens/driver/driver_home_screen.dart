@@ -21,6 +21,8 @@ class DriverHomeScreen extends StatefulWidget {
 class _DriverHomeScreenState extends State<DriverHomeScreen> {
   bool isOnline = false;
   Timer? locationTimer;
+  String driverTier = 'tulia';
+  StreamSubscription<DocumentSnapshot>? driverProfileSubscription;
 
   final UserService userService = UserService();
   final FirebaseFirestore firestore = FirebaseFirestore.instance;
@@ -30,7 +32,35 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   final TextEditingController driverCancelController = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    _listenToDriverProfile();
+  }
+
+  void _listenToDriverProfile() {
+    final currentDriverId = FirebaseAuth.instance.currentUser?.uid;
+    if (currentDriverId != null) {
+      driverProfileSubscription = firestore
+          .collection('users')
+          .doc(currentDriverId)
+          .snapshots()
+          .listen((doc) {
+        if (doc.exists) {
+          final data = doc.data() as Map<String, dynamic>? ?? {};
+          final tier = data['carTier'] ?? 'tulia';
+          if (mounted && tier != driverTier) {
+            setState(() {
+              driverTier = tier;
+            });
+          }
+        }
+      });
+    }
+  }
+
+  @override
   void dispose() {
+    driverProfileSubscription?.cancel();
     locationTimer?.cancel();
     sosMessageController.dispose();
     driverCancelController.dispose();
@@ -231,7 +261,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         foregroundColor: Colors.grey.shade900,
         actions: [
           IconButton(
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen())),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen(isDriver: true))),
             icon: const Icon(Icons.history_rounded),
             tooltip: "Ride History",
           ),
@@ -353,11 +383,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                           builder: (context, snapshot) {
                             if (!snapshot.hasData) return const Center(child: LinearProgressIndicator());
                             final data = snapshot.data?.data() as Map<String, dynamic>? ?? {};
+                            final earnings = data['earnings'] ?? 0;
+                            final totalTrips = data['totalTrips'] ?? 0;
+                            final rating = (data['rating'] ?? 0.0).toDouble();
+                            final totalRatings = data['totalRatings'] ?? 0;
                             
                             return _buildMetricTile(
-                              title: "Your Balance",
-                              value: "KES ${data['earnings'] ?? 0}",
-                              subtitle: "Driver rating: ${(data['rating'] ?? 0.0).toStringAsFixed(1)} ⭐ (${data['totalRatings'] ?? 0} reviews)",
+                              title: "Your Earnings",
+                              value: "KES $earnings",
+                              subtitle: "Total trips: $totalTrips • Commission: 75%\nRating: ${rating.toStringAsFixed(1)} ⭐ ($totalRatings reviews)",
                               backgroundColor: Colors.blue.shade50.withOpacity(0.5),
                               accentColor: Colors.blue.shade700,
                               icon: Icons.account_balance_wallet_outlined,
@@ -379,7 +413,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                 if (rideSnapshot.hasData) {
                                   for (var ride in rideSnapshot.data!.docs) {
                                     final data = ride.data() as Map<String, dynamic>;
-                                    if (data['status'] == 'pending') pendingRides++;
+                                    if (data['status'] == 'searching' || data['status'] == 'pending') pendingRides++;
                                     if (data['status'] == 'accepted' || data['status'] == 'started') ongoingRides++;
                                   }
                                 }
@@ -425,7 +459,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
                     final rides = snapshot.data!.docs.where((ride) {
                       final data = ride.data() as Map<String, dynamic>;
-                      if (data['status'] == 'pending') return true;
+                      final rideTier = data['rideTier'] ?? 'tulia';
+                      // Show searching rides that match this driver's registered tier
+                      if ((data['status'] == 'searching' || data['status'] == 'pending') && rideTier == driverTier) return true;
+                      // Show accepted/started rides only for this driver
                       if ((data['status'] == 'accepted' || data['status'] == 'started') && data['driverId'] == currentDriverId) {
                         return true;
                       }
@@ -475,20 +512,48 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                   children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                      decoration: BoxDecoration(
-                                        color: _getStatusColor(data['status']).withOpacity(0.1),
-                                        borderRadius: BorderRadius.circular(30),
-                                      ),
-                                      child: Text(
-                                        data['status'].toString().toUpperCase(),
-                                        style: TextStyle(color: _getStatusColor(data['status']), fontWeight: FontWeight.bold, fontSize: 12),
-                                      ),
+                                    Row(
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                          decoration: BoxDecoration(
+                                            color: _getStatusColor(data['status']).withOpacity(0.1),
+                                            borderRadius: BorderRadius.circular(30),
+                                          ),
+                                          child: Text(
+                                            data['status'].toString().toUpperCase(),
+                                            style: TextStyle(color: _getStatusColor(data['status']), fontWeight: FontWeight.bold, fontSize: 12),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFF16a085).withOpacity(0.1),
+                                            borderRadius: BorderRadius.circular(30),
+                                          ),
+                                          child: Text(
+                                            (data['rideTier'] ?? 'tulia').toString().toUpperCase(),
+                                            style: const TextStyle(color: Color(0xFF16a085), fontWeight: FontWeight.bold, fontSize: 11),
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    Text(
-                                      "Fare: KES ${data['fare']}",
-                                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
+                                    Column(
+                                      crossAxisAlignment: CrossAxisAlignment.end,
+                                      children: [
+                                        Text(
+                                          "Fare: KES ${data['fare']}",
+                                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
+                                        ),
+                                        if (data['status'] == 'completed') ...[
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            "You earn: KES ${(data['driverEarnings'] ?? (data['fare'] * 0.75)).toStringAsFixed(0)} (75%)",
+                                            style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontWeight: FontWeight.w500),
+                                          ),
+                                        ],
+                                      ],
                                     ),
                                   ],
                                 ),
@@ -513,21 +578,30 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                           padding: const EdgeInsets.symmetric(vertical: 14),
                                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                                         ),
-                                        onPressed: () async {
-                                          if (data['status'] == 'pending') {
-                                            await rideService.acceptRide(rideId: ride.id);
-                                          } else if (data['status'] == 'accepted') {
-                                            await rideService.startRide(rideId: ride.id);
-                                          } else if (data['status'] == 'started') {
-                                            await rideService.completeRide(rideId: ride.id);
-                                          }
-                                          if (!context.mounted) return;
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            const SnackBar(content: Text("Ride track context updated successfully.")),
-                                          );
-                                        },
+                                        onPressed: ((data['status'] == 'searching' || data['status'] == 'pending') && !isOnline)
+                                            ? null
+                                            : () async {
+                                                if (data['status'] == 'searching' || data['status'] == 'pending') {
+                                                  if (!isOnline) {
+                                                    if (!context.mounted) return;
+                                                    ScaffoldMessenger.of(context).showSnackBar(
+                                                      const SnackBar(content: Text("Go online first to accept rides.")),
+                                                    );
+                                                    return;
+                                                  }
+                                                  await rideService.acceptRide(rideId: ride.id);
+                                                } else if (data['status'] == 'accepted') {
+                                                  await rideService.startRide(rideId: ride.id);
+                                                } else if (data['status'] == 'started') {
+                                                  await rideService.completeRide(rideId: ride.id);
+                                                }
+                                                if (!context.mounted) return;
+                                                ScaffoldMessenger.of(context).showSnackBar(
+                                                  const SnackBar(content: Text("Ride track context updated successfully.")),
+                                                );
+                                              },
                                         child: Text(
-                                          data['status'] == 'pending' ? 'Accept Request' : data['status'] == 'accepted' ? 'Start Trip' : 'Complete Trip',
+                                          (data['status'] == 'searching' || data['status'] == 'pending') ? (isOnline ? 'Accept Request' : 'Go Online to Accept') : data['status'] == 'accepted' ? 'Start Trip' : 'Complete Trip',
                                           style: const TextStyle(fontWeight: FontWeight.bold),
                                         ),
                                       ),
@@ -611,7 +685,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 const SizedBox(height: 4),
                 Text(value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.grey.shade900)),
                 const SizedBox(height: 4),
-                Text(subtitle, style: TextStyle(fontSize: 12, color: Colors.grey.shade600), maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text(subtitle, style: TextStyle(fontSize: 12, color: Colors.grey.shade600), maxLines: 2, overflow: TextOverflow.ellipsis),
               ],
             ),
           ),
@@ -644,6 +718,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
   Color _getStatusColor(String? status) {
     switch (status) {
+      case 'searching': return Colors.amber.shade700;
       case 'pending': return Colors.orange.shade700;
       case 'accepted': return Colors.blue.shade700;
       case 'started': return Colors.purple.shade700;
@@ -692,6 +767,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               await firestore.collection('emergencies').add({
                 'type': 'SOS',
                 'userRole': 'driver',
+                'userId': FirebaseAuth.instance.currentUser?.uid,
                 'message': msg,
                 'createdAt': Timestamp.now(),
                 'status': 'active',
@@ -918,7 +994,7 @@ for (var ride in activeRides.docs) {
         MaterialPageRoute(
 
           builder: (_) =>
-              const HistoryScreen(),
+              const HistoryScreen(isDriver: true),
         ),
       );
     },
@@ -1037,6 +1113,7 @@ for (var ride in activeRides.docs) {
                   await FirebaseFirestore.instance.collection('emergencies').add({
                     'type': 'SOS',
                     'userRole': 'driver', // Or change dynamically if used on driver side
+                    'userId': FirebaseAuth.instance.currentUser?.uid,
                     'message': emergencyNote, // <-- THE NEW FIELD
                     'createdAt': Timestamp.now(),
                     'status': 'active',
@@ -1090,7 +1167,7 @@ for (var ride in activeRides.docs) {
 
     return Text(
 
-      "Earnings: KES "
+      "Your Earnings: KES "
       "${data['earnings'] ?? 0}",
 
       style: const TextStyle(
@@ -1152,11 +1229,10 @@ for (var ride in activeRides.docs) {
           ride.data()
               as Map<String, dynamic>;
 
-      if (data['fare'] != null) {
-
-        totalEarnings +=
-            (data['fare'] as num)
-                .toDouble();
+      if (data['status'] == 'completed' && data['fare'] != null) {
+        final driverEarnings = (data['driverEarnings'] as num?)?.toDouble() ??
+            ((data['fare'] as num).toDouble() * 0.75);
+        totalEarnings += driverEarnings;
       }
 
       if (data['status'] ==
