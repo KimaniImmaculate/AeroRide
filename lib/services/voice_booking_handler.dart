@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 
@@ -154,12 +155,15 @@ class AerorideVoiceHandler {
 
     // Write extracted intent and metadata to Cloud Firestore 'ride_requests' collection
     debugPrint("[AerorideVoiceHandler] Saving ride request document to Firestore...");
+    final currentUser = FirebaseAuth.instance.currentUser;
     await _firestore.collection('ride_requests').add({
       'origin': result.origin,
       'destination': result.destination,
-      'rider_id': 'immakym001',
+      'rider_id': currentUser?.uid ?? 'immakym001',
       'status': 'searching_drivers',
       'created_at': FieldValue.serverTimestamp(),
+      'rideTier': 'tulia', // Default to standard tier to satisfy database constraints
+      'estimatedFare': 350, // Default estimated fare to satisfy database constraints
     });
 
     debugPrint("[AerorideVoiceHandler] Document successfully saved to Cloud Firestore.");
