@@ -62,6 +62,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     apiKey: _googleMapsApiKey,
   );
   String? currentRideId;
+  String? assignedDriverId;
+  LatLng? assignedDriverLocation;
   bool selectingPickup = false;
   String? _lastAlertedStatus;
   bool isRecordingVoice = false;
@@ -104,6 +106,43 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     sosMessageController.dispose();
     cancelReasonController.dispose();
     super.dispose();
+  }
+
+  /// Adjusts the camera to perfectly frame the pickup, destination, and assigned driver.
+  void _fitMapBounds() {
+    if (mapController == null || pickupLocation == null) return;
+
+    List<LatLng> points = [pickupLocation!];
+    if (destinationLocation != null) points.add(destinationLocation!);
+    if (assignedDriverLocation != null) points.add(assignedDriverLocation!);
+
+    if (points.length <= 1) return;
+
+    double minLat = points.first.latitude;
+    double maxLat = points.first.latitude;
+    double minLng = points.first.longitude;
+    double maxLng = points.first.longitude;
+
+    for (var point in points) {
+      if (point.latitude < minLat) minLat = point.latitude;
+      if (point.latitude > maxLat) maxLat = point.latitude;
+      if (point.longitude < minLng) minLng = point.longitude;
+      if (point.longitude > maxLng) maxLng = point.longitude;
+    }
+
+    try {
+      mapController!.animateCamera(
+        CameraUpdate.newLatLngBounds(
+          LatLngBounds(
+            southwest: LatLng(minLat, minLng),
+            northeast: LatLng(maxLat, maxLng),
+          ),
+          80.0, // padding
+        ),
+      );
+    } catch (e) {
+      debugPrint("Error animating camera: $e");
+    }
   }
 
   /// Centralized marker management to prevent markers from disappearing
@@ -158,15 +197,22 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               );
             }
 
-            if (distance <= 5000 || pickupLocation == null) {
+            if (doc.id == assignedDriverId || distance <= 5000 || pickupLocation == null) {
+              if (doc.id == assignedDriverId) {
+                assignedDriverLocation = LatLng(driverLat, driverLng);
+                // Call fit bounds but slightly delayed so markers update first
+                Future.microtask(() => _fitMapBounds());
+              }
+
               updatedDriverMarkers.add(
                 Marker(
                   markerId: MarkerId("driver_${doc.id}"),
                   position: LatLng(driverLat, driverLng),
                   icon: BitmapDescriptor.defaultMarkerWithHue(
-                      BitmapDescriptor.hueBlue),
+                      doc.id == assignedDriverId ? BitmapDescriptor.hueViolet : BitmapDescriptor.hueBlue),
                   infoWindow: InfoWindow(
                       title: "Driver: ${data['email']?.split('@')[0]}"),
+                  zIndex: doc.id == assignedDriverId ? 10.0 : 1.0,
                 ),
               );
             }
@@ -1323,6 +1369,12 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                           currentStatus; // Lock state immediately
                       _handleStatusNotifications(context, currentStatus, data);
                     }
+                    if (data['driverId'] != null && data['driverId'] != assignedDriverId) {
+                       assignedDriverId = data['driverId'];
+                       // trigger map bounds update, and marker sync
+                       _syncMarkers();
+                       _fitMapBounds();
+                    }
                   });
 
                   return Column(
@@ -1520,119 +1572,110 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                       if (data['driverEmail'] != null) ...[
                         const SizedBox(height: 12),
                         // --- 4. DRIVER INFO ---
-                        _ProfessionalCard(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                leading: const CircleAvatar(
-                                    backgroundColor: primaryTurquoise,
-                                    child: Icon(
-                                        Icons.directions_car_filled_rounded,
-                                        color: Colors.white)),
-                                title: const Text("Assigned Driver",
-                                    style: TextStyle(
-                                        color: Colors.white70, fontSize: 12)),
-                                subtitle: Text("${data['driverEmail']}",
-                                    style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16)),
-                              ),
-                              if (data['driverId'] != null)
-                                FutureBuilder<DocumentSnapshot>(
-                                  future: firestore
-                                      .collection('users')
-                                      .doc(data['driverId'] as String)
-                                      .get(),
-                                  builder: (context, driverSnap) {
-                                    if (!driverSnap.hasData ||
-                                        !driverSnap.data!.exists) {
-                                      return const SizedBox.shrink();
-                                    }
-                                    final driverData = driverSnap.data!.data()
-                                        as Map<String, dynamic>;
-                                    final driverPhone =
-                                        driverData['phone'] as String?;
-                                    if (driverPhone == null ||
-                                        driverPhone.trim().isEmpty) {
-                                      return const SizedBox.shrink();
-                                    }
-                                    return Padding(
-                                      padding: const EdgeInsets.only(top: 4.0),
-                                      child: Row(
-                                        children: [
-                                          const Icon(Icons.phone_rounded,
-                                              color: primaryTurquoise, size: 16),
-                                          const SizedBox(width: 6),
-                                          Expanded(
-                                            child: Text(
-                                              driverPhone,
-                                              style: GoogleFonts.urbanist(
-                                                  color: Colors.white70,
-                                                  fontSize: 14),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          GestureDetector(
-                                            onTap: () {
-                                              // Launch phone dialer via tel: URI
-                                              final uri =
-                                                  Uri.parse('tel:$driverPhone');
-                                              // Use js interop to open on web
-                                              final window = globalContext
-                                                  .getProperty('window'.toJS);
-                                              if (window != null) {
-                                                (window as JSObject).callMethod(
-                                                    'open'.toJS,
-                                                    uri.toString().toJS);
-                                              }
-                                            },
-                                            child: Container(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                      horizontal: 14,
-                                                      vertical: 8),
-                                              decoration: BoxDecoration(
-                                                color: primaryTurquoise
-                                                    .withValues(alpha: 0.18),
-                                                borderRadius:
-                                                    BorderRadius.circular(10),
-                                                border: Border.all(
-                                                    color: primaryTurquoise
-                                                        .withValues(alpha: 0.5),
-                                                    width: 1),
-                                              ),
-                                              child: Row(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  const Icon(
-                                                      Icons.call_rounded,
-                                                      color: primaryTurquoise,
-                                                      size: 16),
-                                                  const SizedBox(width: 4),
-                                                  Text("Call Driver",
-                                                      style:
-                                                          GoogleFonts.urbanist(
-                                                              color:
-                                                                  primaryTurquoise,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .bold,
-                                                              fontSize: 13)),
-                                                ],
+                        if (data['driverId'] != null)
+                          FutureBuilder<DocumentSnapshot>(
+                            future: firestore
+                                .collection('users')
+                                .doc(data['driverId'] as String)
+                                .get(),
+                            builder: (context, driverSnap) {
+                              if (!driverSnap.hasData || !driverSnap.data!.exists) {
+                                return const SizedBox.shrink();
+                              }
+                              final driverData = driverSnap.data!.data() as Map<String, dynamic>;
+                              final driverPhone = driverData['phone'] as String?;
+                              final vehicleImageUrl = driverData['vehicleImageUrl'] as String?;
+
+                              return _ProfessionalCard(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    ListTile(
+                                      contentPadding: EdgeInsets.zero,
+                                      leading: vehicleImageUrl != null
+                                          ? CircleAvatar(
+                                              radius: 24,
+                                              backgroundImage: NetworkImage(vehicleImageUrl),
+                                              backgroundColor: Colors.transparent,
+                                            )
+                                          : const CircleAvatar(
+                                              backgroundColor: primaryTurquoise,
+                                              child: Icon(Icons.directions_car_filled_rounded,
+                                                  color: Colors.white)),
+                                      title: const Text("Assigned Driver",
+                                          style: TextStyle(
+                                              color: Colors.white70, fontSize: 12)),
+                                      subtitle: Text("${data['driverEmail']}",
+                                          style: const TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 16)),
+                                    ),
+                                    if (driverPhone != null && driverPhone.trim().isNotEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 4.0),
+                                        child: Row(
+                                          children: [
+                                            const Icon(Icons.phone_rounded,
+                                                color: primaryTurquoise, size: 16),
+                                            const SizedBox(width: 6),
+                                            Expanded(
+                                              child: Text(
+                                                driverPhone,
+                                                style: GoogleFonts.urbanist(
+                                                    color: Colors.white70,
+                                                    fontSize: 14),
                                               ),
                                             ),
-                                          ),
-                                        ],
+                                            const SizedBox(width: 8),
+                                            GestureDetector(
+                                              onTap: () {
+                                                // Launch phone dialer via tel: URI
+                                                final uri = Uri.parse('tel:$driverPhone');
+                                                // Use js interop to open on web
+                                                final window = globalContext
+                                                    .getProperty('window'.toJS);
+                                                if (window != null) {
+                                                  (window as JSObject).callMethod(
+                                                      'open'.toJS,
+                                                      uri.toString().toJS);
+                                                }
+                                              },
+                                              child: Container(
+                                                padding: const EdgeInsets.symmetric(
+                                                    horizontal: 14, vertical: 8),
+                                                decoration: BoxDecoration(
+                                                  color: primaryTurquoise
+                                                      .withValues(alpha: 0.18),
+                                                  borderRadius: BorderRadius.circular(10),
+                                                  border: Border.all(
+                                                      color: primaryTurquoise
+                                                          .withValues(alpha: 0.5),
+                                                      width: 1),
+                                                ),
+                                                child: Row(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  children: [
+                                                    const Icon(Icons.call_rounded,
+                                                        color: primaryTurquoise, size: 16),
+                                                    const SizedBox(width: 4),
+                                                    Text("Call Driver",
+                                                        style: GoogleFonts.urbanist(
+                                                            color: primaryTurquoise,
+                                                            fontWeight: FontWeight.bold,
+                                                            fontSize: 13)),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                       ),
-                                    );
-                                  },
+                                  ],
                                 ),
-                            ],
+                              );
+                            },
                           ),
-                        ),
                       ],
 
                       // --- 5. ACTION BAR (SOS & CANCEL RIDE) ---

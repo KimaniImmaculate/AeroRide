@@ -427,7 +427,52 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       email,
                       style: GoogleFonts.urbanist(fontWeight: FontWeight.bold),
                     ),
-                    subtitle: Text("Role: ${role.toUpperCase()} | Phone: $phone"),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text("Role: ${role.toUpperCase()} | Phone: $phone"),
+                        if (role == 'driver' && data['carTier'] != null)
+                          Text("Tier: ${(data['carTier'] as String).toUpperCase()}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blueGrey)),
+                        if (role == 'driver' && data['vehicleImageUrl'] != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8.0),
+                            child: GestureDetector(
+                              onTap: () {
+                                showDialog(
+                                  context: context,
+                                  builder: (_) => Dialog(
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Image.network(data['vehicleImageUrl']),
+                                        Padding(
+                                          padding: const EdgeInsets.all(16.0),
+                                          child: Text(
+                                            "Tier: ${(data['carTier'] ?? 'tulia').toUpperCase()}",
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                          ),
+                                        ),
+                                        TextButton(
+                                          onPressed: () => Navigator.pop(context),
+                                          child: const Text("Close"),
+                                        ),
+                                        const SizedBox(height: 8),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.image, size: 16, color: Colors.blue),
+                                  const SizedBox(width: 4),
+                                  Text("View Vehicle Photo", style: GoogleFonts.urbanist(color: Colors.blue, fontWeight: FontWeight.bold)),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [

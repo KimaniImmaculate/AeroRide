@@ -3,6 +3,10 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:async';
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:firebase_messaging/firebase_messaging.dart';
 import '../history_screen.dart';
 import '../profile_screen.dart';
 import '../chat_screen.dart';
@@ -23,6 +27,68 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   Timer? locationTimer;
   String driverTier = 'tulia';
   StreamSubscription<DocumentSnapshot>? driverProfileSubscription;
+  bool isUploadingImage = false;
+
+  Future<void> _uploadVehiclePhoto() async {
+    final ImagePicker picker = ImagePicker();
+    final XFile? image = await picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 80,
+    );
+
+    if (image == null) return;
+
+    setState(() {
+      isUploadingImage = true;
+    });
+
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return;
+
+      final storageRef = FirebaseStorage.instance
+          .ref()
+          .child('driver_vehicles')
+          .child('${currentUser.uid}.jpg');
+
+      final bytes = await image.readAsBytes();
+      final uploadTask = storageRef.putData(
+        bytes,
+        SettableMetadata(contentType: 'image/jpeg'),
+      );
+
+      final snapshot = await uploadTask;
+      final downloadUrl = await snapshot.ref.getDownloadURL();
+
+      await firestore.collection('users').doc(currentUser.uid).update({
+        'vehicleImageUrl': downloadUrl,
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Vehicle photo uploaded successfully!"),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Upload failed: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          isUploadingImage = false;
+        });
+      }
+    }
+  }
 
   final UserService userService = UserService();
   final FirebaseFirestore firestore = FirebaseFirestore.instance;
@@ -35,6 +101,76 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   void initState() {
     super.initState();
     _listenToDriverProfile();
+    _initFCM();
+  }
+
+  /// Initializes Firebase Cloud Messaging: requests permission, gets token, saves to Firestore
+  Future<void> _initFCM() async {
+    try {
+      final messaging = FirebaseMessaging.instance;
+
+      // Request notification permission from the browser
+      final settings = await messaging.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+
+      if (settings.authorizationStatus == AuthorizationStatus.authorized ||
+          settings.authorizationStatus == AuthorizationStatus.provisional) {
+        // Get the FCM token
+        final token = await messaging.getToken(
+          vapidKey: null, // Uses the default VAPID key from Firebase project
+        );
+
+        if (token != null) {
+          final currentUser = FirebaseAuth.instance.currentUser;
+          if (currentUser != null) {
+            await firestore.collection('users').doc(currentUser.uid).update({
+              'fcmToken': token,
+            });
+            debugPrint('[FCM] Token saved to Firestore: ${token.substring(0, 20)}...');
+          }
+        }
+
+        // Listen for token refresh
+        messaging.onTokenRefresh.listen((newToken) async {
+          final currentUser = FirebaseAuth.instance.currentUser;
+          if (currentUser != null) {
+            await firestore.collection('users').doc(currentUser.uid).update({
+              'fcmToken': newToken,
+            });
+            debugPrint('[FCM] Token refreshed and saved.');
+          }
+        });
+
+        // Handle foreground messages (show a snackbar)
+        FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+          if (mounted) {
+            final title = message.notification?.title ?? 'New Notification';
+            final body = message.notification?.body ?? '';
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+                    if (body.isNotEmpty) Text(body),
+                  ],
+                ),
+                backgroundColor: Colors.blue.shade700,
+                duration: const Duration(seconds: 5),
+              ),
+            );
+          }
+        });
+      } else {
+        debugPrint('[FCM] Notification permission denied.');
+      }
+    } catch (e) {
+      debugPrint('[FCM] Error initializing: $e');
+    }
   }
 
   void _listenToDriverProfile() {
@@ -431,6 +567,107 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                           },
                         ),
                       ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 24),
+
+                // Vehicle Verification Management Card
+                StreamBuilder<DocumentSnapshot>(
+                  stream: firestore.collection('users').doc(currentDriverId).snapshots(),
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData) return const SizedBox.shrink();
+                    final data = snapshot.data?.data() as Map<String, dynamic>? ?? {};
+                    final uploadedUrl = data['vehicleImageUrl'] as String?;
+                    final isWaziriTier = data['carTier'] == 'waziri';
+
+                    return Card(
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        side: BorderSide(color: Colors.grey.shade200),
+                      ),
+                      color: Colors.white,
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.purple.shade50,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Icon(Icons.drive_eta_rounded, color: Colors.purple.shade700, size: 28),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    "Vehicle Verification",
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.grey.shade900,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    uploadedUrl != null
+                                        ? "Vehicle photo uploaded. Status: ${isWaziriTier ? 'Approved (Waziri Premium)' : 'Pending Admin Verification'}"
+                                        : "Please upload an exterior photo of your vehicle for tier verification.",
+                                    style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            if (isUploadingImage)
+                              const CircularProgressIndicator()
+                            else if (uploadedUrl != null)
+                              Stack(
+                                alignment: Alignment.topRight,
+                                children: [
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Image.network(
+                                      uploadedUrl,
+                                      width: 80,
+                                      height: 60,
+                                      fit: BoxFit.cover,
+                                    ),
+                                  ),
+                                  GestureDetector(
+                                    onTap: _uploadVehiclePhoto,
+                                    child: Container(
+                                      decoration: const BoxDecoration(
+                                        color: Colors.black54,
+                                        shape: BoxShape.circle,
+                                      ),
+                                      padding: const EdgeInsets.all(4),
+                                      child: const Icon(Icons.edit, color: Colors.white, size: 14),
+                                    ),
+                                  ),
+                                ],
+                              )
+                            else
+                              ElevatedButton.icon(
+                                onPressed: _uploadVehiclePhoto,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.purple.shade600,
+                                  foregroundColor: Colors.white,
+                                  elevation: 0,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                ),
+                                icon: const Icon(Icons.upload_file, size: 18),
+                                label: const Text("Upload"),
+                              ),
+                          ],
+                        ),
+                      ),
                     );
                   },
                 ),

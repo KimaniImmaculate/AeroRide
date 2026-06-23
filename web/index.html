@@ -18,6 +18,21 @@
   <link rel="manifest" href="manifest.json">
 
 <script async src="https://maps.googleapis.com/maps/api/js?key=AIzaSyANuwPwm1dRFvh_ySIIiW22-dWnUsMrp0k&libraries=geometry&loading=async"></script>  <script src="directions.js"></script>
+  <!-- Firebase Cloud Messaging Service Worker Registration -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('/firebase-messaging-sw.js')
+          .then(function (registration) {
+            console.log('[FCM] Service Worker registered with scope:', registration.scope);
+          })
+          .catch(function (err) {
+            console.warn('[FCM] Service Worker registration failed:', err);
+          });
+      });
+    }
+  </script>
+
   <!-- Puter.js SDK and Custom voice-input automation loop -->
   <script src="https://js.puter.com/v2/"></script>
   <script>

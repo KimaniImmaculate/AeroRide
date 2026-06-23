@@ -9,7 +9,7 @@ const admin = require('firebase-admin');
 const https = require('https');
 const { URL } = require('url');
 const { HttpsError, onRequest } = require('firebase-functions/v2/https');
-const { onDocumentUpdated } = require('firebase-functions/v2/firestore');
+const { onDocumentUpdated, onDocumentCreated } = require('firebase-functions/v2/firestore');
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -330,3 +330,88 @@ exports.enforceRideStateMachine = onDocumentUpdated('rides/{rideId}', async (eve
     
     return null;
   });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔔 FCM PUSH NOTIFICATION: Fires when a new ride request is created.
+//    Sends a push notification to all online drivers whose tier matches.
+// ═══════════════════════════════════════════════════════════════════════════
+exports.onRideRequestCreated = onDocumentCreated(
+  'rides/{rideId}',
+  async (event) => {
+    const rideData = event.data.data();
+    if (!rideData) return null;
+
+    const rideTier = rideData.rideTier || 'tulia';
+    const pickupName = rideData.pickupName || rideData.origin || 'Unknown pickup';
+    const rideId = event.params.rideId;
+
+    // Only notify for rides that are in 'searching' status
+    if (rideData.status !== 'searching') return null;
+
+    try {
+      // Find all online drivers with a matching tier and a valid FCM token
+      const driversSnapshot = await db.collection('users')
+        .where('role', '==', 'driver')
+        .where('isOnline', '==', true)
+        .where('carTier', '==', rideTier)
+        .get();
+
+      if (driversSnapshot.empty) {
+        console.log(`[FCM] No online drivers found for tier: ${rideTier}`);
+        return null;
+      }
+
+      const tokens = [];
+      driversSnapshot.docs.forEach((doc) => {
+        const driverData = doc.data();
+        if (driverData.fcmToken && !driverData.isFlagged) {
+          tokens.push(driverData.fcmToken);
+        }
+      });
+
+      if (tokens.length === 0) {
+        console.log(`[FCM] No valid FCM tokens found for tier: ${rideTier}`);
+        return null;
+      }
+
+      // Build the notification payload
+      const tierNames = {
+        tulia: 'Tulia (Economy)',
+        nuru: 'Nuru (Comfort)',
+        pamoja: 'Pamoja (Shared)',
+        waziri: 'Waziri (Premium)',
+      };
+
+      const message = {
+        notification: {
+          title: '🚗 New Ride Request!',
+          body: `${tierNames[rideTier] || rideTier} ride from ${pickupName}. Tap to accept.`,
+        },
+        data: {
+          rideId: rideId,
+          rideTier: rideTier,
+          type: 'new_ride_request',
+        },
+        tokens: tokens,
+      };
+
+      // Send to all matching drivers
+      const response = await admin.messaging().sendEachForMulticast(message);
+      console.log(`[FCM] Sent ${response.successCount}/${tokens.length} notifications for ride ${rideId} (tier: ${rideTier})`);
+
+      // Log any failures
+      if (response.failureCount > 0) {
+        response.responses.forEach((resp, idx) => {
+          if (!resp.success) {
+            console.warn(`[FCM] Failed to send to token index ${idx}:`, resp.error);
+          }
+        });
+      }
+
+      return null;
+    } catch (error) {
+      console.error('[FCM] Error sending ride request notifications:', error);
+      return null;
+    }
+  }
+);
