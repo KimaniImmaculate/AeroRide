@@ -45,4 +45,13 @@ app.*.map.json
 /android/app/release
 
 /functions/node_modules/
+/payment-server/node_modules/
 .agents/
+
+# Firebase service account key — never commit this
+service-account.json
+deploy.bat
+deploy-hosting-only.bat
+patch.js
+payment-server/test-tls.js
+

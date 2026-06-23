@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
 
 class PaymentService {
-  static const String _backendUrl = 'http://localhost:5000/api';
+  static const String _backendUrl = kIsWeb ? '/api' : 'https://aeroride-665af.web.app/api';
 
   static Future<String> requestMpesaPrompt({
     required String rawPhone,
