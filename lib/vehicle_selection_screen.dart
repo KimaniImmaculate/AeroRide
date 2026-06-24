@@ -353,9 +353,11 @@ class _AeroVibeCardState extends State<_AeroVibeCard> {
       ),
       child: Row(
         children: [
-          Icon(Icons.directions_car_filled_rounded,
-              size: 50,
-              color: widget.isSelected ? Colors.white : primaryTurquoise),
+          Image.asset(
+            widget.tier.iconPath,
+            width: 60,
+            fit: BoxFit.contain,
+          ),
           const SizedBox(width: 16),
           Expanded(
             child: Column(

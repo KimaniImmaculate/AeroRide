@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'dart:ui' as ui;
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 import '../../services/ride_service.dart';
 import '../../vehicle_selection_screen.dart';
@@ -70,6 +72,41 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   bool isVoiceProcessing = false;
   String voiceLanguageCode = 'en-US';
 
+  BitmapDescriptor? carMarkerIconAssigned;
+  BitmapDescriptor? carMarkerIconUnassigned;
+
+  Future<BitmapDescriptor> _getMarkerFromIcon(IconData iconData, Color color, double size) async {
+    final pictureRecorder = ui.PictureRecorder();
+    final canvas = Canvas(pictureRecorder);
+    final textPainter = TextPainter(textDirection: TextDirection.ltr);
+
+    textPainter.text = TextSpan(
+      text: String.fromCharCode(iconData.codePoint),
+      style: TextStyle(
+        fontSize: size,
+        fontFamily: iconData.fontFamily,
+        package: iconData.fontPackage,
+        color: color,
+      ),
+    );
+    textPainter.layout();
+    textPainter.paint(canvas, const Offset(0.0, 0.0));
+
+    final picture = pictureRecorder.endRecording();
+    final image = await picture.toImage(size.toInt(), size.toInt());
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+
+    return BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
+  }
+
+  Future<void> _loadCarMarkerIcons() async {
+    carMarkerIconAssigned = await _getMarkerFromIcon(LucideIcons.car, Colors.deepPurple, 48.0);
+    carMarkerIconUnassigned = await _getMarkerFromIcon(LucideIcons.car, Colors.blue, 36.0);
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   final CameraPosition initialPosition = const CameraPosition(
     target: LatLng(-0.3031, 36.0800),
     zoom: 14,
@@ -80,6 +117,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     super.initState();
     _signInAnonymouslyIfNeeded();
     getCurrentLocation();
+    _loadCarMarkerIcons();
     _startDriverListener();
   }
 
@@ -208,8 +246,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                 Marker(
                   markerId: MarkerId("driver_${doc.id}"),
                   position: LatLng(driverLat, driverLng),
-                  icon: BitmapDescriptor.defaultMarkerWithHue(
-                      doc.id == assignedDriverId ? BitmapDescriptor.hueViolet : BitmapDescriptor.hueBlue),
+                  icon: doc.id == assignedDriverId 
+                      ? (carMarkerIconAssigned ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet))
+                      : (carMarkerIconUnassigned ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue)),
                   infoWindow: InfoWindow(
                       title: "Driver: ${data['email']?.split('@')[0]}"),
                   zIndex: doc.id == assignedDriverId ? 10.0 : 1.0,
