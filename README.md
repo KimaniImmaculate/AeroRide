@@ -1,7 +1,18 @@
-# AeroRide 🚗💨
+# AeroRide 🚗
 ### Premium, AI-Native Ride-Hailing Platform
 
 AeroRide is a next-generation, premium ride-hailing application designed with a focus on dark-theme aesthetics, role-based safety, and hands-free, voice-native operations powered by Google Gemini.
+
+---
+
+## 🔗 Live Links
+
+| | Link |
+|---|---|
+| 🌍 **Landing Website** | [ckimeu323-afk.github.io/aeroride](https://ckimeu323-afk.github.io/aeroride/) |
+| 📱 **Web App** | [aeroride-665af.web.app](https://aeroride-665af.web.app) |
+
+> The landing website includes a **"Get Started"** CTA button that takes you directly to the web app.
 
 ---
 
@@ -35,7 +46,7 @@ Unlike traditional applications that only allow voice typing, AeroRide features 
 *   **Database & Auth:** Google Firebase (Cloud Firestore & Firebase Authentication)
 *   **GenAI Engine:** Google Generative AI Dart SDK (Gemini 2.5 Flash)
 *   **Map Integrations:** Google Maps Flutter SDK & Google Geocoding API
-*   **Payment Integration:** Safaricom M-Pesa STK Push Sandbox
+*   **Payment Integration:** IntaSend Payment Gateway (M-Pesa STK Push & Card payments)
 
 ---
 
