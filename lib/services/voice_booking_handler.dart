@@ -11,20 +11,26 @@ import 'package:geocoding/geocoding.dart';
 /// Model representing the parsed intent, resolved coordinates, and formatted location names
 /// returned by the voice booking pipeline.
 class VoiceBookingResult {
-  final String origin;
-  final double originLat;
-  final double originLng;
-  final String destination;
-  final double destinationLat;
-  final double destinationLng;
+  final String intent; // 'book', 'cancel', or 'sos'
+  final String? origin;
+  final double? originLat;
+  final double? originLng;
+  final String? destination;
+  final double? destinationLat;
+  final double? destinationLng;
+  final String? rideTier; // 'tulia', 'nuru', 'pamoja', or 'waziri'
+  final String? notes; // optional driver notes
 
   VoiceBookingResult({
-    required this.origin,
-    required this.originLat,
-    required this.originLng,
-    required this.destination,
-    required this.destinationLat,
-    required this.destinationLng,
+    required this.intent,
+    this.origin,
+    this.originLat,
+    this.originLng,
+    this.destination,
+    this.destinationLat,
+    this.destinationLng,
+    this.rideTier,
+    this.notes,
   });
 }
 
@@ -90,9 +96,12 @@ class AerorideVoiceHandler {
         systemInstruction: Content.system(
           'You are a local transit assistant. Extract the transit details from the provided audio. '
           'The audio may contain multiple languages including English and Swahili. '
-          'Translate the locations to clean English text. '
-          'Respond ONLY with a valid JSON object containing "origin" and "destination" keys, and nothing else. '
-          'Example: {"origin": "Main Street Station", "destination": "Broadway Mall"}',
+          'Determine the user intent: "book", "cancel", or "sos". '
+          'If booking: extract origin and destination, determine the preferred tier: "tulia" (standard/economy/basic), "nuru" (comfort/premium), "pamoja" (group/seven people), "waziri" (luxury/elite/VIP). Default to "tulia" if unspecified. Extract any special driver instructions as notes. Translate locations to clean English text. '
+          'Respond ONLY with a valid JSON object. '
+          'Example Book: {"intent": "book", "origin": "Main Street Station", "destination": "Broadway Mall", "tier": "waziri", "notes": "I have bags"} '
+          'Example Cancel: {"intent": "cancel"} '
+          'Example SOS: {"intent": "sos", "notes": "Help I am in danger"}',
         ),
         generationConfig: GenerationConfig(
           responseMimeType: 'application/json',
@@ -105,11 +114,14 @@ class AerorideVoiceHandler {
       final prompt = [
         Content.multi([
           DataPart('audio/wav', audioBytes),
-          TextPart('Extract origin and destination from this audio.'),
+          TextPart('Extract transit intent from this audio.'),
         ]),
       ];
 
-      final response = await model.generateContent(prompt);
+      final response = await model.generateContent(prompt).timeout(
+        const Duration(seconds: 15),
+        onTimeout: () => throw TimeoutException("Gemini API request timed out after 15 seconds."),
+      );
       final responseText = response.text;
 
       if (responseText == null || responseText.isEmpty) {
@@ -120,11 +132,22 @@ class AerorideVoiceHandler {
 
       final Map<String, dynamic> result = jsonDecode(responseText) as Map<String, dynamic>;
 
+      final String intent = result['intent'] ?? 'book';
+      final String? tier = result['tier']?.toString().toLowerCase();
+      final String? notes = result['notes'];
+
+      if (intent != 'book') {
+        return VoiceBookingResult(
+          intent: intent,
+          notes: notes,
+        );
+      }
+
       final String? originName = result['origin'];
       final String? destinationName = result['destination'];
 
       if (originName == null || destinationName == null) {
-        throw const FormatException("Invalid transit details: 'origin' or 'destination' are missing.");
+        throw const FormatException("Invalid transit details: 'origin' or 'destination' are missing for a book intent.");
       }
 
       // Geocode using geocoding package
@@ -138,12 +161,15 @@ class AerorideVoiceHandler {
       }
 
       return VoiceBookingResult(
+        intent: intent,
         origin: originName,
         originLat: originLocations.first.latitude,
         originLng: originLocations.first.longitude,
         destination: destinationName,
         destinationLat: destLocations.first.latitude,
         destinationLng: destLocations.first.longitude,
+        rideTier: ['tulia', 'nuru', 'pamoja', 'waziri'].contains(tier) ? tier : 'tulia',
+        notes: notes,
       );
     } catch (e, stack) {
       debugPrint("[AerorideVoiceHandler] Error decoding voice intent: $e");
@@ -174,7 +200,7 @@ class AerorideVoiceHandler {
       'rider_id': currentUser?.uid ?? 'immakym001',
       'status': 'searching_drivers',
       'created_at': FieldValue.serverTimestamp(),
-      'rideTier': 'tulia', // Default to standard tier to satisfy database constraints
+      'rideTier': result.rideTier ?? 'tulia', // Default to standard tier to satisfy database constraints
       'estimatedFare': 350, // Default estimated fare to satisfy database constraints
     });
 

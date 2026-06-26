@@ -29,6 +29,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String? bio;
   String? documents;
   String? passportPhotoUrl;
+  String? carTier;
 
   // Vibrant Turquoise Theme Color
   static const Color primaryTurquoise = Color(0xFF16A085);
@@ -70,6 +71,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         bio = data['bio'] ?? '';
         documents = data['documents'] ?? '';
         passportPhotoUrl = data['passportPhotoUrl'] ?? '';
+        carTier = data['carTier'] ?? 'tulia';
       }
     } catch (e) {
       if (!mounted) return;
@@ -389,6 +391,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 ),
                                 const SizedBox(height: 20),
                               ],
+                              TextFormField(
+                                key: ValueKey('tier_$carTier'),
+                                initialValue: carTier?.toUpperCase(),
+                                readOnly: true,
+                                style: GoogleFonts.urbanist(color: Colors.white, fontWeight: FontWeight.bold),
+                                decoration: _glassInputDecoration(
+                                    "Vehicle Tier / Class", Icons.drive_eta_rounded),
+                              ),
+                              const SizedBox(height: 20),
                               TextFormField(
                                 key: ValueKey('license_$licenseNumber'),
                                 initialValue: licenseNumber,

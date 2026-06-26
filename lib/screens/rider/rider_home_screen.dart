@@ -688,7 +688,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     }
   }
 
-  Future<void> requestRide() async {
+  Future<void> requestRide({String? voiceTier, String? voiceNotes}) async {
     // --- AUTHENTICATION GATE ---
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null || currentUser.isAnonymous) {
@@ -732,21 +732,46 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
 
     double distanceKm = distanceMeters / 1000;
 
-    // Navigate to VehicleSelectionScreen to choose a tier
-    if (!mounted) return;
-    final bool? confirmed = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(
-        builder: (context) => VehicleSelectionScreen(
-          user: FirebaseAuth.instance.currentUser!,
-          distanceKm: distanceKm,
-        ),
-      ),
-    );
+    String selectedTierId = voiceTier ?? 'tulia';
+    double fare = 0;
 
-    if (confirmed != true) {
-      dev.log("RIDER_LOG: Vehicle selection cancelled by user.");
-      return;
+    if (voiceTier == null) {
+      // Navigate to VehicleSelectionScreen to choose a tier
+      if (!mounted) return;
+      final bool? confirmed = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(
+          builder: (context) => VehicleSelectionScreen(
+            user: FirebaseAuth.instance.currentUser!,
+            distanceKm: distanceKm,
+          ),
+        ),
+      );
+
+      if (confirmed != true) {
+        dev.log("RIDER_LOG: Vehicle selection cancelled by user.");
+        return;
+      }
+      
+      final rideController = Provider.of<RideController>(context, listen: false);
+      final selectedTierObj = rideController.selectedTier;
+
+      if (selectedTierObj == null) {
+        throw Exception("No vehicle tier was selected.");
+      }
+      selectedTierId = selectedTierObj.id;
+      fare = selectedTierObj.baseFare + (distanceKm * selectedTierObj.perKmRate);
+    } else {
+      // Automatic fare calculation based on voice tier
+      if (voiceTier == 'waziri') {
+        fare = 700 + (distanceKm * 150);
+      } else if (voiceTier == 'pamoja') {
+        fare = 500 + (distanceKm * 110);
+      } else if (voiceTier == 'nuru') {
+        fare = 350 + (distanceKm * 80);
+      } else {
+        fare = 150 + (distanceKm * 45); // tulia
+      }
     }
 
     setState(() {
@@ -754,23 +779,15 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     });
 
     try {
-      // Get the selected tier from RideController
-      final rideController = Provider.of<RideController>(context, listen: false);
-      final selectedTier = rideController.selectedTier;
-
-      if (selectedTier == null) {
-        throw Exception("No vehicle tier was selected.");
-      }
-
-      double fare = selectedTier.baseFare + (distanceKm * selectedTier.perKmRate);
       dev.log("RIDER_LOG: Distance: $distanceKm km");
-      dev.log("RIDER_LOG: Selected Tier: ${selectedTier.id}, calculated fare: $fare");
+      dev.log("RIDER_LOG: Selected Tier: $selectedTierId, calculated fare: $fare");
 
       final rideId = await rideService.requestRide(
         pickup: pickupController.text.trim().isEmpty ? "Current Location" : pickupController.text.trim(),
         destination: destinationController.text.trim().isEmpty ? "Selected Destination" : destinationController.text.trim(),
         fare: fare,
-        rideTier: selectedTier.id,
+        rideTier: selectedTierId,
+        notes: voiceNotes,
       );
 
       currentRideId = rideId;
@@ -1008,12 +1025,55 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           return;
         }
 
+        if (result.intent == 'sos') {
+          String note = result.notes?.trim() ?? "Voice triggered SOS";
+          await firestore.collection('emergencies').add({
+            'type': 'SOS',
+            'userRole': 'rider',
+            'userId': FirebaseAuth.instance.currentUser?.uid,
+            'message': note.isEmpty ? "Voice triggered SOS" : note,
+            'createdAt': Timestamp.now(),
+            'status': 'active',
+          });
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                backgroundColor: Colors.red,
+                content: Text("🚨 Voice SOS Sent to Admin!")));
+          }
+          AerorideVoiceHandler.speak("Emergency SOS sent.");
+          return;
+        }
+
+        if (result.intent == 'cancel') {
+          if (currentRideId != null) {
+            String note = result.notes?.trim() ?? "Voice Cancellation";
+            await rideService.cancelRide(
+              rideId: currentRideId!,
+              cancelledBy: 'rider',
+              reason: note.isEmpty ? "Voice Cancellation" : note,
+            );
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content: Text("Ride cancelled successfully.")));
+            }
+            AerorideVoiceHandler.speak("Your ride has been cancelled.");
+          } else {
+            AerorideVoiceHandler.speak("You have no active ride to cancel.");
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content: Text("No active ride to cancel.")));
+            }
+          }
+          return;
+        }
+
+        // intent == 'book'
         // Fill pickup and destination text fields
         setState(() {
-          pickupController.text = result.origin;
-          destinationController.text = result.destination;
-          pickupLocation = LatLng(result.originLat, result.originLng);
-          destinationLocation = LatLng(result.destinationLat, result.destinationLng);
+          pickupController.text = result.origin!;
+          destinationController.text = result.destination!;
+          pickupLocation = LatLng(result.originLat!, result.originLng!);
+          destinationLocation = LatLng(result.destinationLat!, result.destinationLng!);
         });
 
         _syncMarkers();
@@ -1059,7 +1119,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   }
 
   void _showVoiceBookingConfirmation(VoiceBookingResult result) {
-    _speakWithLanguage('confirm_prompt', val1: result.origin, val2: result.destination);
+    _speakWithLanguage('confirm_prompt', val1: result.origin!, val2: result.destination!);
     
     showDialog(
       context: context,
@@ -1087,10 +1147,20 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                   style: TextStyle(color: Colors.white70)),
               const SizedBox(height: 16),
               const Text("Pickup Location:", style: TextStyle(color: Colors.white38, fontSize: 12)),
-              Text(result.origin, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              Text(result.origin!, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
               const SizedBox(height: 12),
               const Text("Destination Drop-off:", style: TextStyle(color: Colors.white38, fontSize: 12)),
-              Text(result.destination, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              Text(result.destination!, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              if (result.rideTier != null) ...[
+                const SizedBox(height: 12),
+                const Text("Vehicle Tier:", style: TextStyle(color: Colors.white38, fontSize: 12)),
+                Text(result.rideTier!.toUpperCase(), style: const TextStyle(color: primaryTurquoise, fontWeight: FontWeight.bold)),
+              ],
+              if (result.notes != null && result.notes!.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text("Instructions:", style: TextStyle(color: Colors.white38, fontSize: 12)),
+                Text(result.notes!, style: const TextStyle(color: Colors.white70, fontStyle: FontStyle.italic)),
+              ],
             ],
           ),
           actions: [
@@ -1105,7 +1175,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               onPressed: () {
                 Navigator.of(context).pop();
                 _speakWithLanguage('booking_confirmed');
-                requestRide();
+                requestRide(voiceTier: result.rideTier, voiceNotes: result.notes);
               },
               child: const Text("Yes, Book Ride", style: TextStyle(color: primaryTurquoise, fontWeight: FontWeight.bold)),
             ),

@@ -813,6 +813,30 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                   child: SizedBox(height: 14, child: VerticalDivider(thickness: 2, width: 2)),
                                 ),
                                 _buildLocationLine(Icons.location_on_rounded, Colors.orange, "Destination Dropoff", data['destination']),
+                                if (data['notes'] != null && data['notes'].toString().isNotEmpty) ...[
+                                  const SizedBox(height: 12),
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.amber.shade50,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.amber.shade200),
+                                    ),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Icon(Icons.info_outline_rounded, color: Colors.amber.shade800, size: 20),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            "Instructions: ${data['notes']}",
+                                            style: TextStyle(color: Colors.amber.shade900, fontSize: 13, fontWeight: FontWeight.w500),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                                 const SizedBox(height: 20),
                                 
                                 // Modular Action Controller View Strip

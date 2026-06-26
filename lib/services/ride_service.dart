@@ -11,6 +11,7 @@ class RideService {
     required String destination,
     required double fare,
     required String rideTier,
+    String? notes,
   }) async {
     print("Entered requestRide");
     final currentUser = FirebaseAuth.instance.currentUser;
@@ -22,6 +23,7 @@ class RideService {
       'fare': fare.round(),
       'estimatedFare': fare.round(),
       'rideTier': rideTier,
+      if (notes != null && notes.isNotEmpty) 'notes': notes,
       'createdAt': Timestamp.now(),
       'riderId': currentUser?.uid,
       'riderEmail': currentUser?.email,
