@@ -22,7 +22,20 @@ jobs:
         run: echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_AERORIDE_665AF }}' > /tmp/sa.json
 
       - name: Deploy to Firebase Hosting
-        run: npx -y firebase-tools@latest deploy --only hosting --project aeroride-665af --non-interactive
+        run: |
+          output=$(npx -y firebase-tools@latest deploy --only hosting --project aeroride-665af --non-interactive 2>&1)
+          exit_code=$?
+          echo "$output"
+          if [ $exit_code -ne 0 ]; then
+            if echo "$output" | grep -q "current active version"; then
+              echo "✅ No changes detected — current version is already live. Skipping release."
+              exit 0
+            else
+              echo "❌ Deploy failed with an unexpected error."
+              exit 1
+            fi
+          fi
         env:
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/sa.json
+
 
