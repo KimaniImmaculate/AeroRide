@@ -760,38 +760,39 @@ class _LoginScreenState extends State<LoginScreen> {
                                 ),
                         ),
                       ),
-                      const SizedBox(height: 24),
-
-                      // Route Nav text link to register
-                      TextButton(
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => RegisterScreen(expectedRole: widget.expectedRole),
-                            ),
-                          );
-                        },
-                        child: RichText(
-                          text: TextSpan(
-                            style: GoogleFonts.urbanist(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white.withValues(alpha: 0.6),
-                            ),
-                            children: const [
-                              TextSpan(text: "Don't have an account? "),
-                              TextSpan(
-                                text: 'Register',
-                                style: TextStyle(
-                                  color: primaryTurquoise,
-                                  fontWeight: FontWeight.bold,
-                                ),
+                      if (widget.expectedRole != 'driver') ...[
+                        const SizedBox(height: 24),
+                        // Route Nav text link to register
+                        TextButton(
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => RegisterScreen(expectedRole: widget.expectedRole),
                               ),
-                            ],
+                            );
+                          },
+                          child: RichText(
+                            text: TextSpan(
+                              style: GoogleFonts.urbanist(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white.withValues(alpha: 0.6),
+                              ),
+                              children: const [
+                                TextSpan(text: "Don't have an account? "),
+                                TextSpan(
+                                  text: 'Register',
+                                  style: TextStyle(
+                                    color: primaryTurquoise,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
+                      ],
                     ],
                   ),
                 ),

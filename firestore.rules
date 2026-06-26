@@ -65,7 +65,7 @@ service cloud.firestore {
     }
 
     match /rides/{rideId} {
-      allow read: if isRideParticipant(resource.data) || isCandidateDriverRide(resource.data) || (
+      allow read: if isAdmin() || isRideParticipant(resource.data) || isCandidateDriverRide(resource.data) || (
         signedIn() && resource.data.status == 'searching'
       );
 

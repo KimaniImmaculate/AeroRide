@@ -433,56 +433,55 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   ),
                   color: Colors.white,
                   child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        
-                        Row(
+                    padding: const EdgeInsets.all(20),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final isMobile = constraints.maxWidth < 480;
+                        final statusRow = Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
                             Container(
-                              width: 14,
-                              height: 14,
+                              width: 12,
+                              height: 12,
                               decoration: BoxDecoration(
                                 color: isOnline ? Colors.green : Colors.grey.shade400,
                                 shape: BoxShape.circle,
                               ),
                             ),
-                            const SizedBox(width: 12),
+                            const SizedBox(width: 10),
                             Text(
                               isOnline ? "Active & Online" : "Currently Offline",
                               style: TextStyle(
-                                fontSize: 20,
+                                fontSize: 18,
                                 fontWeight: FontWeight.bold,
                                 color: Colors.grey.shade900,
                               ),
                             ),
                           ],
-                        ),
-                        
-                        Row(
+                        );
+                        final actionButtons = Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            // Emergency SOS Trigger UI Element
                             ElevatedButton.icon(
                               onPressed: () => _showEmergencyDialog(context),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: Colors.red.shade50,
                                 foregroundColor: Colors.red.shade700,
                                 elevation: 0,
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                               ),
-                              icon: const Icon(Icons.gpp_bad_rounded, size: 20),
-                              label: const Text("SOS Alert", style: TextStyle(fontWeight: FontWeight.bold)),
+                              icon: const Icon(Icons.gpp_bad_rounded, size: 18),
+                              label: const Text("SOS", style: TextStyle(fontWeight: FontWeight.bold)),
                             ),
-                            const SizedBox(width: 12),
+                            const SizedBox(width: 10),
                             ElevatedButton(
                               onPressed: toggleDriverStatus,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: isOnline ? Colors.grey.shade900 : Colors.blue.shade600,
                                 foregroundColor: Colors.white,
                                 elevation: 0,
-                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                               ),
                               child: Text(
@@ -491,8 +490,22 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                               ),
                             ),
                           ],
-                        ),
-                      ],
+                        );
+                        if (isMobile) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              statusRow,
+                              const SizedBox(height: 16),
+                              actionButtons,
+                            ],
+                          );
+                        }
+                        return Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [statusRow, actionButtons],
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -803,74 +816,102 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                 const SizedBox(height: 20),
                                 
                                 // Modular Action Controller View Strip
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: ElevatedButton(
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: Colors.blue.shade600,
-                                          foregroundColor: Colors.white,
-                                          elevation: 0,
-                                          padding: const EdgeInsets.symmetric(vertical: 14),
-                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                        ),
-                                        onPressed: ((data['status'] == 'searching' || data['status'] == 'pending') && !isOnline)
-                                            ? null
-                                            : () async {
-                                                if (data['status'] == 'searching' || data['status'] == 'pending') {
-                                                  if (!isOnline) {
-                                                    if (!context.mounted) return;
-                                                    ScaffoldMessenger.of(context).showSnackBar(
-                                                      const SnackBar(content: Text("Go online first to accept rides.")),
-                                                    );
-                                                    return;
-                                                  }
-                                                  await rideService.acceptRide(rideId: ride.id);
-                                                } else if (data['status'] == 'accepted') {
-                                                  await rideService.startRide(rideId: ride.id);
-                                                } else if (data['status'] == 'started') {
-                                                  await rideService.completeRide(rideId: ride.id);
+                                LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    final isNarrow = constraints.maxWidth < 360;
+                                    final primaryButton = ElevatedButton(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.blue.shade600,
+                                        foregroundColor: Colors.white,
+                                        elevation: 0,
+                                        padding: const EdgeInsets.symmetric(vertical: 14),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                      ),
+                                      onPressed: ((data['status'] == 'searching' || data['status'] == 'pending') && !isOnline)
+                                          ? null
+                                          : () async {
+                                              if (data['status'] == 'searching' || data['status'] == 'pending') {
+                                                if (!isOnline) {
+                                                  if (!context.mounted) return;
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    const SnackBar(content: Text("Go online first to accept rides.")),
+                                                  );
+                                                  return;
                                                 }
-                                                if (!context.mounted) return;
-                                                ScaffoldMessenger.of(context).showSnackBar(
-                                                  const SnackBar(content: Text("Ride track context updated successfully.")),
-                                                );
-                                              },
-                                        child: Text(
-                                          (data['status'] == 'searching' || data['status'] == 'pending') ? (isOnline ? 'Accept Request' : 'Go Online to Accept') : data['status'] == 'accepted' ? 'Start Trip' : 'Complete Trip',
-                                          style: const TextStyle(fontWeight: FontWeight.bold),
-                                        ),
+                                                await rideService.acceptRide(rideId: ride.id);
+                                              } else if (data['status'] == 'accepted') {
+                                                await rideService.startRide(rideId: ride.id);
+                                              } else if (data['status'] == 'started') {
+                                                await rideService.completeRide(rideId: ride.id);
+                                              }
+                                              if (!context.mounted) return;
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                const SnackBar(content: Text("Ride track context updated successfully.")),
+                                              );
+                                            },
+                                      child: Text(
+                                        (data['status'] == 'searching' || data['status'] == 'pending') ? (isOnline ? 'Accept Request' : 'Go Online to Accept') : data['status'] == 'accepted' ? 'Start Trip' : 'Complete Trip',
+                                        style: const TextStyle(fontWeight: FontWeight.bold),
                                       ),
-                                    ),
-                                    if (data['status'] != 'completed') ...[
-                                      const SizedBox(width: 8),
-                                      IconButton(
-                                        style: IconButton.styleFrom(
-                                          backgroundColor: Colors.grey.shade100,
-                                          foregroundColor: Colors.grey.shade700,
-                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                          padding: const EdgeInsets.all(14),
+                                    );
+                                    
+                                    final iconButtons = Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        IconButton(
+                                          style: IconButton.styleFrom(
+                                            backgroundColor: Colors.grey.shade100,
+                                            foregroundColor: Colors.grey.shade700,
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                            padding: const EdgeInsets.all(14),
+                                          ),
+                                          onPressed: () {
+                                            Navigator.push(context, MaterialPageRoute(builder: (_) => ChatScreen(rideId: ride.id)));
+                                          },
+                                          icon: const Icon(Icons.chat_bubble_outline_rounded, size: 20),
+                                          tooltip: "Message Rider",
                                         ),
-                                        onPressed: () {
-                                          Navigator.push(context, MaterialPageRoute(builder: (_) => ChatScreen(rideId: ride.id)));
-                                        },
-                                        icon: const Icon(Icons.chat_bubble_outline_rounded, size: 20),
-                                        tooltip: "Message Rider",
-                                      ),
-                                      const SizedBox(width: 8),
-                                      IconButton(
-                                        style: IconButton.styleFrom(
-                                          backgroundColor: Colors.red.shade50,
-                                          foregroundColor: Colors.red.shade600,
-                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                          padding: const EdgeInsets.all(14),
+                                        const SizedBox(width: 8),
+                                        IconButton(
+                                          style: IconButton.styleFrom(
+                                            backgroundColor: Colors.red.shade50,
+                                            foregroundColor: Colors.red.shade600,
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                            padding: const EdgeInsets.all(14),
+                                          ),
+                                          onPressed: () => _showCancelDialog(context, ride.id),
+                                          icon: const Icon(Icons.close_rounded, size: 20),
+                                          tooltip: "Cancel Dispatch",
                                         ),
-                                        onPressed: () => _showCancelDialog(context, ride.id),
-                                        icon: const Icon(Icons.close_rounded, size: 20),
-                                        tooltip: "Cancel Dispatch",
-                                      ),
-                                    ],
-                                  ],
+                                      ],
+                                    );
+
+                                    if (isNarrow) {
+                                      return Column(
+                                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                                        children: [
+                                          primaryButton,
+                                          if (data['status'] != 'completed') ...[
+                                            const SizedBox(height: 8),
+                                            Row(
+                                              mainAxisAlignment: MainAxisAlignment.end,
+                                              children: [iconButtons],
+                                            ),
+                                          ],
+                                        ],
+                                      );
+                                    }
+                                    
+                                    return Row(
+                                      children: [
+                                        Expanded(child: primaryButton),
+                                        if (data['status'] != 'completed') ...[
+                                          const SizedBox(width: 8),
+                                          iconButtons,
+                                        ],
+                                      ],
+                                    );
+                                  },
                                 ),
                               ],
                             ),

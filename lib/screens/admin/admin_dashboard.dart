@@ -279,10 +279,15 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      runAlignment: WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 8,
                       children: [
-                        Row(
+                        Wrap(
+                          spacing: 8,
                           children: [
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -295,8 +300,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                 style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold),
                               ),
                             ),
-                            if (data['rideTier'] != null) ...[
-                              const SizedBox(width: 8),
+                            if (data['rideTier'] != null)
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                 decoration: BoxDecoration(
@@ -308,7 +312,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                   style: const TextStyle(color: Color(0xFF16a085), fontSize: 10, fontWeight: FontWeight.bold),
                                 ),
                               ),
-                            ],
                           ],
                         ),
                         Column(
