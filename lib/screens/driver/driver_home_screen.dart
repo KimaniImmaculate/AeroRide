@@ -5,7 +5,6 @@ import 'package:geolocator/geolocator.dart';
 import 'dart:async';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:firebase_messaging/firebase_messaging.dart';
 import '../history_screen.dart';
 import '../profile_screen.dart';
@@ -182,7 +181,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           .snapshots()
           .listen((doc) {
         if (doc.exists) {
-          final data = doc.data() as Map<String, dynamic>? ?? {};
+          final data = doc.data() ?? {};
           final tier = data['carTier'] ?? 'tulia';
           if (mounted && tier != driverTier) {
             setState(() {
@@ -797,7 +796,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                 const SizedBox(height: 16),
                                 _buildLocationLine(Icons.radio_button_checked_rounded, Colors.blue, "Pickup Location", data['pickup']),
                                 const Padding(
-                                  padding: const EdgeInsets.only(left: 11),
+                                  padding: EdgeInsets.only(left: 11),
                                   child: SizedBox(height: 14, child: VerticalDivider(thickness: 2, width: 2)),
                                 ),
                                 _buildLocationLine(Icons.location_on_rounded, Colors.orange, "Destination Dropoff", data['destination']),

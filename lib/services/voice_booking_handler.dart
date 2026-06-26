@@ -5,9 +5,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
+import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:geocoding/geocoding.dart';
 
 /// Model representing the parsed intent, resolved coordinates, and formatted location names
-/// returned by the Puter.js and Google Maps geocoder pipeline.
+/// returned by the voice booking pipeline.
 class VoiceBookingResult {
   final String origin;
   final double originLat;
@@ -27,7 +29,7 @@ class VoiceBookingResult {
 }
 
 /// A reusable, headless service handler for managing hands-free ride booking
-/// voice input pipelines via browser integrations.
+/// voice input pipelines via browser integrations and Gemini.
 class AerorideVoiceHandler {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
@@ -40,7 +42,7 @@ class AerorideVoiceHandler {
     globalContext.callMethod('aerorideStartRecording'.toJS);
   }
 
-  /// Stops recording microphone input and returns the local audio Blob URL.
+  /// Stops recording microphone input and returns the local audio as Base64.
   static Future<String> stopRecording() async {
     if (!kIsWeb) return "";
     if (!globalContext.has('aerorideStopRecording')) {
@@ -52,7 +54,7 @@ class AerorideVoiceHandler {
     }
     final JSAny? resolvedAny = await (jsPromise as JSPromise).toDart;
     if (resolvedAny == null) {
-      throw StateError("Expected stopRecording to return an audio URL, got null.");
+      throw StateError("Expected stopRecording to return an audio string, got null.");
     }
     return (resolvedAny as JSString).toDart;
   }
@@ -67,71 +69,81 @@ class AerorideVoiceHandler {
     }
   }
 
-  /// Decodes and interprets the voice input from the given audio blob URL,
+  /// Decodes and interprets the voice input from the given base64 audio,
   /// returning the enriched origin and destination details including coordinates.
-  static Future<VoiceBookingResult?> decodeVoiceToIntent(String audioBlobUrl) async {
-    debugPrint("[AerorideVoiceHandler] Decoding voice input from URL: $audioBlobUrl");
+  static Future<VoiceBookingResult?> decodeVoiceToIntent(String base64Audio) async {
+    debugPrint("[AerorideVoiceHandler] Decoding voice input via Gemini...");
 
     try {
       if (!kIsWeb) {
         throw UnsupportedError("Voice booking pipeline is only supported in browser environments.");
       }
 
-      // Check if our processVoiceToIntent JavaScript wrapper function is available on the window object
-      if (!globalContext.has('processVoiceToIntent')) {
-        throw StateError("JavaScript interop wrapper 'processVoiceToIntent' is not defined.");
+      final apiKey = const String.fromEnvironment('GEMINI_API_KEY');
+      if (apiKey.isEmpty) {
+        throw StateError("GEMINI_API_KEY is not set. Please provide it during compilation.");
       }
 
-      // Call the JS function and capture the returned promise
-      final JSAny? jsPromise = globalContext.callMethod(
-        'processVoiceToIntent'.toJS,
-        audioBlobUrl.toJS,
+      final model = GenerativeModel(
+        model: 'gemini-2.5-flash',
+        apiKey: apiKey,
+        systemInstruction: Content.system(
+          'You are a local transit assistant. Extract the transit details from the provided audio. '
+          'The audio may contain multiple languages including English and Swahili. '
+          'Translate the locations to clean English text. '
+          'Respond ONLY with a valid JSON object containing "origin" and "destination" keys, and nothing else. '
+          'Example: {"origin": "Main Street Station", "destination": "Broadway Mall"}',
+        ),
+        generationConfig: GenerationConfig(
+          responseMimeType: 'application/json',
+          temperature: 0.2, // Low temperature for deterministic JSON output
+        ),
       );
 
-      if (jsPromise == null) {
-        throw StateError("Failed to call JavaScript processVoiceToIntent (returned null).");
+      final audioBytes = base64Decode(base64Audio);
+      
+      final prompt = [
+        Content.multi([
+          DataPart('audio/wav', audioBytes),
+          TextPart('Extract origin and destination from this audio.'),
+        ]),
+      ];
+
+      final response = await model.generateContent(prompt);
+      final responseText = response.text;
+
+      if (responseText == null || responseText.isEmpty) {
+        throw Exception("Empty response from Gemini.");
       }
 
-      // Await the JS Promise in Dart using toDart
-      debugPrint("[AerorideVoiceHandler] Awaiting JS Promise resolution...");
-      final JSAny? resolvedAny = await (jsPromise as JSPromise).toDart;
+      debugPrint("[AerorideVoiceHandler] Gemini Response: $responseText");
 
-      if (resolvedAny == null) {
-        throw StateError("Expected JS wrapper to return a result, got null.");
+      final Map<String, dynamic> result = jsonDecode(responseText) as Map<String, dynamic>;
+
+      final String? originName = result['origin'];
+      final String? destinationName = result['destination'];
+
+      if (originName == null || destinationName == null) {
+        throw const FormatException("Invalid transit details: 'origin' or 'destination' are missing.");
       }
 
-      final String rawResult = (resolvedAny as JSString).toDart;
-      debugPrint("[AerorideVoiceHandler] Received raw JSON response: $rawResult");
+      // Geocode using geocoding package
+      debugPrint("[AerorideVoiceHandler] Geocoding origin and destination to coordinates...");
+      
+      final originLocations = await locationFromAddress(originName);
+      final destLocations = await locationFromAddress(destinationName);
 
-      // Parse the JSON payload safely in Dart
-      final Map<String, dynamic> result = jsonDecode(rawResult) as Map<String, dynamic>;
-
-      // Check if an error was captured on the JS side
-      if (result.containsKey('error')) {
-        throw Exception("Pipeline failed in JS context: ${result['error']}");
-      }
-
-      final String? origin = result['origin'];
-      final double? originLat = double.tryParse(result['origin_lat'].toString());
-      final double? originLng = double.tryParse(result['origin_lng'].toString());
-      final String? destination = result['destination'];
-      final double? destinationLat = double.tryParse(result['destination_lat'].toString());
-      final double? destinationLng = double.tryParse(result['destination_lng'].toString());
-
-      if (origin == null || origin.trim().isEmpty || originLat == null || originLng == null) {
-        throw const FormatException("Invalid transit details: 'origin' or coordinates are missing.");
-      }
-      if (destination == null || destination.trim().isEmpty || destinationLat == null || destinationLng == null) {
-        throw const FormatException("Invalid transit details: 'destination' or coordinates are missing.");
+      if (originLocations.isEmpty || destLocations.isEmpty) {
+         throw Exception("Failed to geocode origin or destination.");
       }
 
       return VoiceBookingResult(
-        origin: origin.trim(),
-        originLat: originLat,
-        originLng: originLng,
-        destination: destination.trim(),
-        destinationLat: destinationLat,
-        destinationLng: destinationLng,
+        origin: originName,
+        originLat: originLocations.first.latitude,
+        originLng: originLocations.first.longitude,
+        destination: destinationName,
+        destinationLat: destLocations.first.latitude,
+        destinationLng: destLocations.first.longitude,
       );
     } catch (e, stack) {
       debugPrint("[AerorideVoiceHandler] Error decoding voice intent: $e");
@@ -140,12 +152,12 @@ class AerorideVoiceHandler {
     }
   }
 
-  /// Initiates the legacy parallel voice-to-booking pipeline.
-  /// Resolves the voice input audio blob URL using Whisper-1 and Gemini 2.5 Flash-lite via Puter.js,
+  /// Initiates the native voice-to-booking pipeline.
+  /// Resolves the voice input audio using Gemini,
   /// saves the extracted intent parameters into Cloud Firestore,
   /// and notifies the frontend via the [onBookingConfirmed] callback.
   static Future<void> startVoiceBookingPipeline({
-    required String audioBlobUrl,
+    required String audioBlobUrl, // Carrying base64 audio payload now to preserve existing method signature hooks
     required VoidCallback onBookingConfirmed,
   }) async {
     final result = await decodeVoiceToIntent(audioBlobUrl);

@@ -3,7 +3,6 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart'; // ⚡ ADDED: To expose the state pipeline
 import 'firebase_options.dart';
-import 'gateway_portal.dart';
 import 'screens/auth/auth_gate.dart';
 import 'services/ride_service.dart'; // ⚡ ADDED: Imports the RideController you just modified
 

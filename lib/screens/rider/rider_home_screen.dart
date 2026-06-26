@@ -15,7 +15,6 @@ import 'dart:async';
 import '../chat_screen.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:js_interop';
@@ -337,8 +336,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
         (route) => false,
       );
     } catch (e) {
-      if (context.mounted)
+      if (context.mounted) {
         Navigator.pop(context); // Dismiss loading spinner on error
+      }
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1175,8 +1175,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               stream:
                   firestore.collection('rides').doc(currentRideId).snapshots(),
               builder: (context, snapshot) {
-                if (!snapshot.hasData || !snapshot.data!.exists)
+                if (!snapshot.hasData || !snapshot.data!.exists) {
                   return const SizedBox.shrink();
+                }
                 final data = snapshot.data!.data() as Map<String, dynamic>;
                 final status = data['status'];
 
@@ -1395,8 +1396,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                   if (!snapshot.hasData) return const SizedBox.shrink();
 
                   final ride = snapshot.data!;
-                  if (!ride.exists || ride.data() == null)
+                  if (!ride.exists || ride.data() == null) {
                     return const SizedBox.shrink();
+                  }
 
                   final data = ride.data() as Map<String, dynamic>;
                   final currentStatus = data['status']?.toString();
@@ -2005,8 +2007,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                       context: context,
                     );
 
-                    if (context.mounted)
+                    if (context.mounted) {
                       Navigator.pop(context); // Dismiss loading
+                    }
 
                     if (result == 'COMPLETED') {
                       await firestore

@@ -262,8 +262,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
             }
             
             Color statusColor = Colors.grey;
-            if (status == 'completed') statusColor = Colors.green;
-            else if (status == 'cancelled') statusColor = Colors.red;
+            if (status == 'completed') {
+              statusColor = Colors.green;
+            } else if (status == 'cancelled') statusColor = Colors.red;
             else statusColor = Colors.orange;
 
             return Card(
@@ -643,7 +644,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
-                      value: selectedCarTier,
+                      initialValue: selectedCarTier,
                       decoration: const InputDecoration(
                         labelText: "Car Tier",
                         prefixIcon: Icon(Icons.drive_eta_rounded),
