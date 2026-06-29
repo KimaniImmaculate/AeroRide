@@ -71,11 +71,9 @@ class PaymentService {
               String? mpesaReference = statusData['mpesaReference'];
 
               if (state == 'COMPLETE' || state == 'COMPLETED') {
-                String mpesaRef = statusData['invoice']['mpesa_reference'] ??
-                    statusData['invoice']['clearing_reference'] ??
-                    'NO_REF';
+                // Backend returns { state, mpesaReference } — not a nested invoice object
                 return MpesaPaymentResult(
-                    status: 'COMPLETED', transactionCode: mpesaRef);
+                    status: 'COMPLETED', transactionCode: mpesaReference);
               }
               if (state == 'FAILED' || state == 'REJECTED') {
                 return MpesaPaymentResult(status: 'FAILED');

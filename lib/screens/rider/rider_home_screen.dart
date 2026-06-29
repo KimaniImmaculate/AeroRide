@@ -2227,19 +2227,17 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                     }
 
                     if (result.status == 'COMPLETED') {
-                      List<String> parts = result.status.split(':');
-                      String mpesaReferenceCode =
-                          parts.length > 1 ? parts[1] : 'M-PESA-OK';
+                      // result.transactionCode holds the actual M-Pesa reference (e.g. "OJI46JHG8F")
+                      final String? mpesaReferenceCode = result.transactionCode;
                       // Mark ride as paid and record transaction reference
                       await firestore
                           .collection('rides')
                           .doc(activeRideId)
                           .update({
                         'paymentStatus': 'paid',
-                        'mpesaReference': mpesaReferenceCode,
                         'paymentTimestamp': FieldValue.serverTimestamp(),
-                        if (result.transactionCode != null)
-                          'mpesaReference': result.transactionCode,
+                        if (mpesaReferenceCode != null)
+                          'mpesaReference': mpesaReferenceCode,
                       });
 
                       // Credit 100% of cancellation fee to the assigned driver
@@ -2281,7 +2279,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                         scaffold.showSnackBar(
                           SnackBar(
                               content: Text(
-                                  "✅ Payment Successful! Ref: $mpesaReferenceCode"),
+                                  mpesaReferenceCode != null
+                                    ? "✅ Payment Successful! Ref: $mpesaReferenceCode"
+                                    : "✅ Payment Successful!"),
                               backgroundColor: Colors.green),
                         );
                       }
