@@ -4,6 +4,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
+import 'dart:convert';
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
@@ -444,11 +445,13 @@ class _AdminDashboardState extends State<AdminDashboard> {
                               onTap: () {
                                 showDialog(
                                   context: context,
-                                  builder: (_) => Dialog(
+                                  builder: (context) => Dialog(
                                     child: Column(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        Image.network(data['vehicleImageUrl']),
+                                        data['vehicleImageUrl'].toString().startsWith('data:image')
+                                            ? Image.memory(base64Decode(data['vehicleImageUrl'].toString().split(',').last))
+                                            : Image.network(data['vehicleImageUrl']),
                                         Padding(
                                           padding: const EdgeInsets.all(16.0),
                                           child: Text(
@@ -1045,7 +1048,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
             } else if (userSnapshot.hasData && userSnapshot.data != null && userSnapshot.data!.exists) {
               final userData = userSnapshot.data!.data() as Map<String, dynamic>?;
               if (userData != null) {
-                senderIdentifier = userData['email'] ?? userData['phone'] ?? "UNKNOWN ${filterRole.toUpperCase()}";
+                final name = userData['name'] ?? 'Unknown';
+                final contact = userData['email'] ?? userData['phone'] ?? 'No Contact';
+                senderIdentifier = "$name ($contact)";
               }
             }
 

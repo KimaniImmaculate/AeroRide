@@ -5,7 +5,7 @@ import 'package:geolocator/geolocator.dart';
 import 'dart:async';
 import 'package:intl/intl.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:firebase_storage/firebase_storage.dart';
+import 'dart:convert';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import '../history_screen.dart';
 import '../profile_screen.dart';
@@ -33,7 +33,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(
       source: ImageSource.gallery,
-      imageQuality: 80,
+      imageQuality: 50,
+      maxWidth: 600,
+      maxHeight: 600,
     );
 
     if (image == null) {
@@ -52,29 +54,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         return;
       }
 
-      debugPrint('[Vehicle Upload] Starting upload process for user: ${currentUser.uid}');
-      final storageRef = FirebaseStorage.instance
-          .ref()
-          .child('driver_vehicles')
-          .child('${currentUser.uid}.jpg');
-
-      debugPrint('[Vehicle Upload] Reading image bytes...');
       final bytes = await image.readAsBytes();
-      
-      debugPrint('[Vehicle Upload] Initiating storage upload task...');
-      final uploadTask = storageRef.putData(
-        bytes,
-        SettableMetadata(contentType: 'image/jpeg'),
-      );
+      final base64String = base64Encode(bytes);
+      final downloadUrl = "data:image/jpeg;base64,$base64String";
 
-      // Add a 15-second timeout to prevent the upload from hanging indefinitely on network or CORS issues
-      debugPrint('[Vehicle Upload] Awaiting upload task completion (with 15s timeout)...');
-      final snapshot = await uploadTask.timeout(const Duration(seconds: 15));
-      
-      debugPrint('[Vehicle Upload] Upload completed. Fetching download URL...');
-      final downloadUrl = await snapshot.ref.getDownloadURL().timeout(const Duration(seconds: 10));
-
-      debugPrint('[Vehicle Upload] Updating Firestore user document with vehicleImageUrl: $downloadUrl');
+      debugPrint('[Vehicle Upload] Updating Firestore user document with base64 vehicleImageUrl');
       await firestore.collection('users').doc(currentUser.uid).update({
         'vehicleImageUrl': downloadUrl,
       });
@@ -1180,10 +1164,26 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () async {
               String msg = localSosController.text.trim().isEmpty ? "No explicit driver text context notes." : localSosController.text.trim();
+              
+              final user = FirebaseAuth.instance.currentUser;
+              String? userName;
+              String? userEmail;
+              
+              if (user != null) {
+                final userDoc = await firestore.collection('users').doc(user.uid).get();
+                if (userDoc.exists) {
+                  final data = userDoc.data();
+                  userName = data?['name'];
+                  userEmail = data?['email'] ?? data?['phone'];
+                }
+              }
+
               await firestore.collection('emergencies').add({
                 'type': 'SOS',
                 'userRole': 'driver',
-                'userId': FirebaseAuth.instance.currentUser?.uid,
+                'userId': user?.uid,
+                'userName': userName,
+                'userEmail': userEmail,
                 'message': msg,
                 'createdAt': Timestamp.now(),
                 'status': 'active',

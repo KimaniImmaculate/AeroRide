@@ -1722,7 +1722,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                                       leading: vehicleImageUrl != null
                                           ? CircleAvatar(
                                               radius: 24,
-                                              backgroundImage: NetworkImage(vehicleImageUrl),
+                                              backgroundImage: vehicleImageUrl.startsWith('data:image') 
+                                                  ? MemoryImage(base64Decode(vehicleImageUrl.split(',').last)) as ImageProvider
+                                                  : NetworkImage(vehicleImageUrl),
                                               backgroundColor: Colors.transparent,
                                             )
                                           : const CircleAvatar(
@@ -2284,10 +2286,26 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
               onPressed: () async {
                 String note = localSosController.text.trim();
+                
+                final user = FirebaseAuth.instance.currentUser;
+                String? userName;
+                String? userEmail;
+                
+                if (user != null) {
+                  final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+                  if (userDoc.exists) {
+                    final data = userDoc.data();
+                    userName = data?['name'];
+                    userEmail = data?['email'] ?? data?['phone'];
+                  }
+                }
+
                 await FirebaseFirestore.instance.collection('emergencies').add({
                   'type': 'SOS',
                   'userRole': 'rider',
-                  'userId': FirebaseAuth.instance.currentUser?.uid,
+                  'userId': user?.uid,
+                  'userName': userName,
+                  'userEmail': userEmail,
                   'message': note.isEmpty ? "No details provided" : note,
                   'createdAt': Timestamp.now(),
                   'status': 'active',

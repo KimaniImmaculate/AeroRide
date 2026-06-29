@@ -137,12 +137,41 @@ class RideService {
     required String cancelledBy,
     required String reason,
   }) async {
-    await firestore.collection('rides').doc(rideId).update({
+    final rideDoc = await firestore.collection('rides').doc(rideId).get();
+    int? cancellationFee;
+    
+    if (rideDoc.exists && rideDoc.data() != null) {
+      final data = rideDoc.data()!;
+      final tier = data['rideTier']?.toString().toLowerCase() ?? 'tulia';
+      
+      switch (tier) {
+        case 'nuru':
+          cancellationFee = 350;
+          break;
+        case 'pamoja':
+          cancellationFee = 500;
+          break;
+        case 'waziri':
+          cancellationFee = 700;
+          break;
+        case 'tulia':
+        default:
+          cancellationFee = 150;
+      }
+    }
+
+    final updateData = <String, dynamic>{
       'status': 'cancelled',
       'cancelledBy': cancelledBy,
       'cancelReason': reason,
       'cancelledAt': Timestamp.now(),
-    });
+    };
+    
+    if (cancellationFee != null) {
+      updateData['fare'] = cancellationFee;
+    }
+
+    await firestore.collection('rides').doc(rideId).update(updateData);
   }
 }
 
