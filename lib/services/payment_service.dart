@@ -13,7 +13,8 @@ class MpesaPaymentResult {
 }
 
 class PaymentService {
-  static const String _backendUrl = kIsWeb ? '/api' : 'https://aeroride-665af.web.app/api';
+  static const String _backendUrl =
+      kIsWeb ? '/api' : 'https://aeroride-665af.web.app/api';
 
   static Future<MpesaPaymentResult> requestMpesaPrompt({
     required String rawPhone,
@@ -39,13 +40,17 @@ class PaymentService {
         String invoiceId = data['invoice']['invoice_id'];
 
         // 2. Start checking the status every 2 seconds (Long polling)
-        for (int i = 0; i < 5; i++) { // Check up to 5 times (10 seconds max)
+        for (int i = 0; i < 5; i++) {
+          // Check up to 5 times (10 seconds max)
           await Future.delayed(const Duration(seconds: 2));
 
           // A. Check Firestore first (fastest and most reliable if webhook succeeds)
           if (rideId != null) {
             try {
-              final doc = await FirebaseFirestore.instance.collection('rides').doc(rideId).get();
+              final doc = await FirebaseFirestore.instance
+                  .collection('rides')
+                  .doc(rideId)
+                  .get();
               if (doc.exists && doc.data()?['paymentStatus'] == 'paid') {
                 return MpesaPaymentResult(
                   status: 'COMPLETED',
@@ -61,11 +66,16 @@ class PaymentService {
                 .get(Uri.parse('$_backendUrl/payment-status/$invoiceId'));
             if (statusCheck.statusCode == 200) {
               final statusData = jsonDecode(statusCheck.body);
-              String state = statusData['state']; // 'PENDING', 'PROCESSING', 'COMPLETED', or 'FAILED'
+              String state = statusData[
+                  'state']; // 'PENDING', 'PROCESSING', 'COMPLETED', or 'FAILED'
               String? mpesaReference = statusData['mpesaReference'];
 
               if (state == 'COMPLETE' || state == 'COMPLETED') {
-                return MpesaPaymentResult(status: 'COMPLETED', transactionCode: mpesaReference);
+                String mpesaRef = statusData['invoice']['mpesa_reference'] ??
+                    statusData['invoice']['clearing_reference'] ??
+                    'NO_REF';
+                return MpesaPaymentResult(
+                    status: 'COMPLETED', transactionCode: mpesaRef);
               }
               if (state == 'FAILED' || state == 'REJECTED') {
                 return MpesaPaymentResult(status: 'FAILED');
@@ -81,4 +91,3 @@ class PaymentService {
     }
   }
 }
-

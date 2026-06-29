@@ -74,7 +74,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   BitmapDescriptor? carMarkerIconAssigned;
   BitmapDescriptor? carMarkerIconUnassigned;
 
-  Future<BitmapDescriptor> _getMarkerFromIcon(IconData iconData, Color color, double size) async {
+  Future<BitmapDescriptor> _getMarkerFromIcon(
+      IconData iconData, Color color, double size) async {
     final pictureRecorder = ui.PictureRecorder();
     final canvas = Canvas(pictureRecorder);
     final textPainter = TextPainter(textDirection: TextDirection.ltr);
@@ -99,8 +100,10 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   }
 
   Future<void> _loadCarMarkerIcons() async {
-    carMarkerIconAssigned = await _getMarkerFromIcon(LucideIcons.car, Colors.deepPurple, 48.0);
-    carMarkerIconUnassigned = await _getMarkerFromIcon(LucideIcons.car, Colors.blue, 36.0);
+    carMarkerIconAssigned =
+        await _getMarkerFromIcon(LucideIcons.car, Colors.deepPurple, 48.0);
+    carMarkerIconUnassigned =
+        await _getMarkerFromIcon(LucideIcons.car, Colors.blue, 36.0);
     if (mounted) {
       setState(() {});
     }
@@ -234,7 +237,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               );
             }
 
-            if (doc.id == assignedDriverId || distance <= 5000 || pickupLocation == null) {
+            if (doc.id == assignedDriverId ||
+                distance <= 5000 ||
+                pickupLocation == null) {
               if (doc.id == assignedDriverId) {
                 assignedDriverLocation = LatLng(driverLat, driverLng);
                 // Call fit bounds but slightly delayed so markers update first
@@ -245,9 +250,13 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                 Marker(
                   markerId: MarkerId("driver_${doc.id}"),
                   position: LatLng(driverLat, driverLng),
-                  icon: doc.id == assignedDriverId 
-                      ? (carMarkerIconAssigned ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet))
-                      : (carMarkerIconUnassigned ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue)),
+                  icon: doc.id == assignedDriverId
+                      ? (carMarkerIconAssigned ??
+                          BitmapDescriptor.defaultMarkerWithHue(
+                              BitmapDescriptor.hueViolet))
+                      : (carMarkerIconUnassigned ??
+                          BitmapDescriptor.defaultMarkerWithHue(
+                              BitmapDescriptor.hueBlue)),
                   infoWindow: InfoWindow(
                       title: "Driver: ${data['email']?.split('@')[0]}"),
                   zIndex: doc.id == assignedDriverId ? 10.0 : 1.0,
@@ -401,7 +410,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
       pickupController.text = pickupName;
       _syncMarkers();
     });
-    
+
     if (mapController != null && pickupLocation != null) {
       mapController!.animateCamera(
         CameraUpdate.newLatLngZoom(pickupLocation!, 15),
@@ -752,15 +761,17 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
         dev.log("RIDER_LOG: Vehicle selection cancelled by user.");
         return;
       }
-      
-      final rideController = Provider.of<RideController>(context, listen: false);
+
+      final rideController =
+          Provider.of<RideController>(context, listen: false);
       final selectedTierObj = rideController.selectedTier;
 
       if (selectedTierObj == null) {
         throw Exception("No vehicle tier was selected.");
       }
       selectedTierId = selectedTierObj.id;
-      fare = selectedTierObj.baseFare + (distanceKm * selectedTierObj.perKmRate);
+      fare =
+          selectedTierObj.baseFare + (distanceKm * selectedTierObj.perKmRate);
     } else {
       // Automatic fare calculation based on voice tier
       if (voiceTier == 'waziri') {
@@ -780,11 +791,16 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
 
     try {
       dev.log("RIDER_LOG: Distance: $distanceKm km");
-      dev.log("RIDER_LOG: Selected Tier: $selectedTierId, calculated fare: $fare");
+      dev.log(
+          "RIDER_LOG: Selected Tier: $selectedTierId, calculated fare: $fare");
 
       final rideId = await rideService.requestRide(
-        pickup: pickupController.text.trim().isEmpty ? "Current Location" : pickupController.text.trim(),
-        destination: destinationController.text.trim().isEmpty ? "Selected Destination" : destinationController.text.trim(),
+        pickup: pickupController.text.trim().isEmpty
+            ? "Current Location"
+            : pickupController.text.trim(),
+        destination: destinationController.text.trim().isEmpty
+            ? "Selected Destination"
+            : destinationController.text.trim(),
         fare: fare,
         rideTier: selectedTierId,
         notes: voiceNotes,
@@ -845,7 +861,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
       mainAxisSize: MainAxisSize.min,
       children: [
         Tooltip(
-          message: isRecordingVoice ? "Stop Recording" : "Voice Book (Speak Origin & Destination)",
+          message: isRecordingVoice
+              ? "Stop Recording"
+              : "Voice Book (Speak Origin & Destination)",
           child: GestureDetector(
             onTap: _handleVoiceRecordingToggle,
             child: Container(
@@ -855,8 +873,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
-                    color: (isRecordingVoice ? Colors.redAccent : primaryTurquoise)
-                        .withValues(alpha: 0.3),
+                    color:
+                        (isRecordingVoice ? Colors.redAccent : primaryTurquoise)
+                            .withValues(alpha: 0.3),
                     blurRadius: 8,
                     spreadRadius: 2,
                   )
@@ -890,8 +909,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
             },
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 250),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
                 color: voiceLanguageCode == 'sw-KE'
                     ? primaryTurquoise
@@ -932,7 +950,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     String text = "";
     switch (key) {
       case 'processing':
-        text = isSwahili 
+        text = isSwahili
             ? "Tafadhali subiri, tunashughulikia ombi lako la safari."
             : "Processing your voice booking request, please wait.";
         break;
@@ -952,9 +970,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
             : "Please confirm if the route from $val1 to $val2 is correct.";
         break;
       case 'booking_cancelled':
-        text = isSwahili
-            ? "Safari imeghairiwa."
-            : "Booking cancelled.";
+        text = isSwahili ? "Safari imeghairiwa." : "Booking cancelled.";
         break;
       case 'booking_confirmed':
         text = isSwahili
@@ -990,7 +1006,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   Future<void> _handleVoiceRecordingToggle() async {
     if (!kIsWeb) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Voice booking is only supported on Web.")),
+        const SnackBar(
+            content: Text("Voice booking is only supported on Web.")),
       );
       return;
     }
@@ -1017,7 +1034,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text("Failed to parse transit locations. Please speak clearly."),
+                content: Text(
+                    "Failed to parse transit locations. Please speak clearly."),
                 behavior: SnackBarBehavior.floating,
               ),
             );
@@ -1060,8 +1078,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           } else {
             AerorideVoiceHandler.speak("You have no active ride to cancel.");
             if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text("No active ride to cancel.")));
+              ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("No active ride to cancel.")));
             }
           }
           return;
@@ -1073,7 +1091,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
           pickupController.text = result.origin!;
           destinationController.text = result.destination!;
           pickupLocation = LatLng(result.originLat!, result.originLng!);
-          destinationLocation = LatLng(result.destinationLat!, result.destinationLng!);
+          destinationLocation =
+              LatLng(result.destinationLat!, result.destinationLng!);
         });
 
         _syncMarkers();
@@ -1103,7 +1122,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
         });
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text("🎙️ Listening... Speak your origin and destination, then tap the stop button."),
+            content: Text(
+                "🎙️ Listening... Speak your origin and destination, then tap the stop button."),
             behavior: SnackBarBehavior.floating,
             duration: Duration(seconds: 8),
           ),
@@ -1111,7 +1131,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("Error starting voice recorder: ${e.toString()}")),
+            SnackBar(
+                content:
+                    Text("Error starting voice recorder: ${e.toString()}")),
           );
         }
       }
@@ -1119,8 +1141,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
   }
 
   void _showVoiceBookingConfirmation(VoiceBookingResult result) {
-    _speakWithLanguage('confirm_prompt', val1: result.origin!, val2: result.destination!);
-    
+    _speakWithLanguage('confirm_prompt',
+        val1: result.origin!, val2: result.destination!);
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -1136,7 +1159,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               Icon(Icons.mic_rounded, color: primaryTurquoise),
               SizedBox(width: 8),
               Text("Confirm Route",
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
             ],
           ),
           content: Column(
@@ -1146,20 +1170,32 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               const Text("Is this the correct route you want to book?",
                   style: TextStyle(color: Colors.white70)),
               const SizedBox(height: 16),
-              const Text("Pickup Location:", style: TextStyle(color: Colors.white38, fontSize: 12)),
-              Text(result.origin!, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              const Text("Pickup Location:",
+                  style: TextStyle(color: Colors.white38, fontSize: 12)),
+              Text(result.origin!,
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
               const SizedBox(height: 12),
-              const Text("Destination Drop-off:", style: TextStyle(color: Colors.white38, fontSize: 12)),
-              Text(result.destination!, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              const Text("Destination Drop-off:",
+                  style: TextStyle(color: Colors.white38, fontSize: 12)),
+              Text(result.destination!,
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
               if (result.rideTier != null) ...[
                 const SizedBox(height: 12),
-                const Text("Vehicle Tier:", style: TextStyle(color: Colors.white38, fontSize: 12)),
-                Text(result.rideTier!.toUpperCase(), style: const TextStyle(color: primaryTurquoise, fontWeight: FontWeight.bold)),
+                const Text("Vehicle Tier:",
+                    style: TextStyle(color: Colors.white38, fontSize: 12)),
+                Text(result.rideTier!.toUpperCase(),
+                    style: const TextStyle(
+                        color: primaryTurquoise, fontWeight: FontWeight.bold)),
               ],
               if (result.notes != null && result.notes!.isNotEmpty) ...[
                 const SizedBox(height: 12),
-                const Text("Instructions:", style: TextStyle(color: Colors.white38, fontSize: 12)),
-                Text(result.notes!, style: const TextStyle(color: Colors.white70, fontStyle: FontStyle.italic)),
+                const Text("Instructions:",
+                    style: TextStyle(color: Colors.white38, fontSize: 12)),
+                Text(result.notes!,
+                    style: const TextStyle(
+                        color: Colors.white70, fontStyle: FontStyle.italic)),
               ],
             ],
           ),
@@ -1169,15 +1205,20 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                 Navigator.of(context).pop();
                 _speakWithLanguage('booking_cancelled');
               },
-              child: const Text("No", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+              child: const Text("No",
+                  style: TextStyle(
+                      color: Colors.redAccent, fontWeight: FontWeight.bold)),
             ),
             TextButton(
               onPressed: () {
                 Navigator.of(context).pop();
                 _speakWithLanguage('booking_confirmed');
-                requestRide(voiceTier: result.rideTier, voiceNotes: result.notes);
+                requestRide(
+                    voiceTier: result.rideTier, voiceNotes: result.notes);
               },
-              child: const Text("Yes, Book Ride", style: TextStyle(color: primaryTurquoise, fontWeight: FontWeight.bold)),
+              child: const Text("Yes, Book Ride",
+                  style: TextStyle(
+                      color: primaryTurquoise, fontWeight: FontWeight.bold)),
             ),
           ],
         );
@@ -1209,7 +1250,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                     Navigator.push(
                         context,
                         MaterialPageRoute(
-                            builder: (_) => const HistoryScreen(isDriver: false)));
+                            builder: (_) =>
+                                const HistoryScreen(isDriver: false)));
                   },
                   icon:
                       const Icon(Icons.history_rounded, color: Colors.white70),
@@ -1316,7 +1358,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                           }
                           _syncMarkers();
                         });
-                        
+
                         if (wasSelectingPickup && mapController != null) {
                           mapController!.animateCamera(
                             CameraUpdate.newLatLngZoom(position, 15),
@@ -1368,25 +1410,31 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                                               decoration: BoxDecoration(
                                                   color: Colors.grey.shade300,
                                                   borderRadius:
-                                                      BorderRadius.circular(2))),
+                                                      BorderRadius.circular(
+                                                          2))),
                                           ListTile(
                                             leading: const Icon(
                                                 Icons.my_location_rounded,
                                                 color: Colors.blue),
-                                            title: const Text("Use Current Location",
+                                            title: const Text(
+                                                "Use Current Location",
                                                 style: TextStyle(
-                                                    fontWeight: FontWeight.w600)),
+                                                    fontWeight:
+                                                        FontWeight.w600)),
                                             onTap: () {
                                               Navigator.pop(context);
                                               getCurrentLocation();
                                             },
                                           ),
                                           ListTile(
-                                            leading: const Icon(Icons.map_rounded,
+                                            leading: const Icon(
+                                                Icons.map_rounded,
                                                 color: Colors.green),
-                                            title: const Text("Select point from Map",
+                                            title: const Text(
+                                                "Select point from Map",
                                                 style: TextStyle(
-                                                    fontWeight: FontWeight.w600)),
+                                                    fontWeight:
+                                                        FontWeight.w600)),
                                             onTap: () {
                                               Navigator.pop(context);
                                               selectingPickup = true;
@@ -1395,7 +1443,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                                                 const SnackBar(
                                                   content: Text(
                                                       "Tap a pickup point on the map"),
-                                                  behavior: SnackBarBehavior.floating,
+                                                  behavior:
+                                                      SnackBarBehavior.floating,
                                                 ),
                                               );
                                             },
@@ -1414,7 +1463,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                                 fillColor: Colors.grey.shade50,
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: Colors.grey.shade300),
+                                  borderSide:
+                                      BorderSide(color: Colors.grey.shade300),
                                 ),
                               ),
                             ),
@@ -1429,7 +1479,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                                 fillColor: Colors.grey.shade50,
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: Colors.grey.shade300),
+                                  borderSide:
+                                      BorderSide(color: Colors.grey.shade300),
                                 ),
                               ),
                             ),
@@ -1480,11 +1531,12 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                           currentStatus; // Lock state immediately
                       _handleStatusNotifications(context, currentStatus, data);
                     }
-                    if (data['driverId'] != null && data['driverId'] != assignedDriverId) {
-                       assignedDriverId = data['driverId'];
-                       // trigger map bounds update, and marker sync
-                       _syncMarkers();
-                       _fitMapBounds();
+                    if (data['driverId'] != null &&
+                        data['driverId'] != assignedDriverId) {
+                      assignedDriverId = data['driverId'];
+                      // trigger map bounds update, and marker sync
+                      _syncMarkers();
+                      _fitMapBounds();
                     }
                   });
 
@@ -1507,29 +1559,32 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                                   style: GoogleFonts.urbanist(
                                       color: Colors.white,
                                       fontWeight: FontWeight.w600)),
-                              Builder(
-                                builder: (context) {
-                                  double displayFare = double.tryParse(data['fare'].toString()) ?? 0.0;
-                                  if (currentStatus == 'cancelled') {
-                                    final tier = (data['rideTier']?.toString() ?? 'tulia').trim().toLowerCase();
-                                    if (tier == 'nuru') {
-                                      displayFare = 350.0;
-                                    } else if (tier == 'pamoja') {
-                                      displayFare = 500.0;
-                                    } else if (tier == 'waziri') {
-                                      displayFare = 700.0;
-                                    } else {
-                                      displayFare = 150.0;
-                                    }
+                              Builder(builder: (context) {
+                                double displayFare =
+                                    double.tryParse(data['fare'].toString()) ??
+                                        0.0;
+                                if (currentStatus == 'cancelled') {
+                                  final tier =
+                                      (data['rideTier']?.toString() ?? 'tulia')
+                                          .trim()
+                                          .toLowerCase();
+                                  if (tier == 'nuru') {
+                                    displayFare = 350.0;
+                                  } else if (tier == 'pamoja') {
+                                    displayFare = 500.0;
+                                  } else if (tier == 'waziri') {
+                                    displayFare = 700.0;
+                                  } else {
+                                    displayFare = 150.0;
                                   }
-                                  return Text(
-                                      "KES ${displayFare.toStringAsFixed(0)}",
-                                      style: GoogleFonts.urbanist(
-                                          fontSize: 24,
-                                          fontWeight: FontWeight.w900,
-                                          color: primaryTurquoise));
                                 }
-                              ),
+                                return Text(
+                                    "KES ${displayFare.toStringAsFixed(0)}",
+                                    style: GoogleFonts.urbanist(
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.w900,
+                                        color: primaryTurquoise));
+                              }),
                             ],
                           ),
                         ),
@@ -1596,8 +1651,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                                             borderRadius:
                                                 BorderRadius.circular(12))),
                                     child: const Text("Pay Cancellation Fare",
-                                        style:
-                                            TextStyle(color: Colors.white)),
+                                        style: TextStyle(color: Colors.white)),
                                   ),
                                 ),
                               ] else ...[
@@ -1625,7 +1679,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                                       });
                                     },
                                     child: const Text("Book Another Ride",
-                                        style: TextStyle(color: Colors.white70)),
+                                        style:
+                                            TextStyle(color: Colors.white70)),
                                   ),
                                 ),
                               ],
@@ -1711,12 +1766,16 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                                 .doc(data['driverId'] as String)
                                 .get(),
                             builder: (context, driverSnap) {
-                              if (!driverSnap.hasData || !driverSnap.data!.exists) {
+                              if (!driverSnap.hasData ||
+                                  !driverSnap.data!.exists) {
                                 return const SizedBox.shrink();
                               }
-                              final driverData = driverSnap.data!.data() as Map<String, dynamic>;
-                              final driverPhone = driverData['phone'] as String?;
-                              final vehicleImageUrl = driverData['vehicleImageUrl'] as String?;
+                              final driverData = driverSnap.data!.data()
+                                  as Map<String, dynamic>;
+                              final driverPhone =
+                                  driverData['phone'] as String?;
+                              final vehicleImageUrl =
+                                  driverData['vehicleImageUrl'] as String?;
 
                               return _ProfessionalCard(
                                 child: Column(
@@ -1727,31 +1786,44 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                                       leading: vehicleImageUrl != null
                                           ? CircleAvatar(
                                               radius: 24,
-                                              backgroundImage: vehicleImageUrl.startsWith('data:image') 
-                                                  ? MemoryImage(base64Decode(vehicleImageUrl.split(',').last)) as ImageProvider
-                                                  : NetworkImage(vehicleImageUrl),
-                                              backgroundColor: Colors.transparent,
+                                              backgroundImage: vehicleImageUrl
+                                                      .startsWith('data:image')
+                                                  ? MemoryImage(base64Decode(
+                                                          vehicleImageUrl
+                                                              .split(',')
+                                                              .last))
+                                                      as ImageProvider
+                                                  : NetworkImage(
+                                                      vehicleImageUrl),
+                                              backgroundColor:
+                                                  Colors.transparent,
                                             )
                                           : const CircleAvatar(
                                               backgroundColor: primaryTurquoise,
-                                              child: Icon(Icons.directions_car_filled_rounded,
+                                              child: Icon(
+                                                  Icons
+                                                      .directions_car_filled_rounded,
                                                   color: Colors.white)),
                                       title: const Text("Assigned Driver",
                                           style: TextStyle(
-                                              color: Colors.white70, fontSize: 12)),
+                                              color: Colors.white70,
+                                              fontSize: 12)),
                                       subtitle: Text("${data['driverEmail']}",
                                           style: const TextStyle(
                                               color: Colors.white,
                                               fontWeight: FontWeight.bold,
                                               fontSize: 16)),
                                     ),
-                                    if (driverPhone != null && driverPhone.trim().isNotEmpty)
+                                    if (driverPhone != null &&
+                                        driverPhone.trim().isNotEmpty)
                                       Padding(
-                                        padding: const EdgeInsets.only(top: 4.0),
+                                        padding:
+                                            const EdgeInsets.only(top: 4.0),
                                         child: Row(
                                           children: [
                                             const Icon(Icons.phone_rounded,
-                                                color: primaryTurquoise, size: 16),
+                                                color: primaryTurquoise,
+                                                size: 16),
                                             const SizedBox(width: 6),
                                             Expanded(
                                               child: Text(
@@ -1765,38 +1837,48 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                                             GestureDetector(
                                               onTap: () {
                                                 // Launch phone dialer via tel: URI
-                                                final uri = Uri.parse('tel:$driverPhone');
+                                                final uri = Uri.parse(
+                                                    'tel:$driverPhone');
                                                 // Use js interop to open on web
                                                 final window = globalContext
                                                     .getProperty('window'.toJS);
                                                 if (window != null) {
-                                                  (window as JSObject).callMethod(
-                                                      'open'.toJS,
-                                                      uri.toString().toJS);
+                                                  (window as JSObject)
+                                                      .callMethod('open'.toJS,
+                                                          uri.toString().toJS);
                                                 }
                                               },
                                               child: Container(
-                                                padding: const EdgeInsets.symmetric(
-                                                    horizontal: 14, vertical: 8),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                        horizontal: 14,
+                                                        vertical: 8),
                                                 decoration: BoxDecoration(
                                                   color: primaryTurquoise
                                                       .withValues(alpha: 0.18),
-                                                  borderRadius: BorderRadius.circular(10),
+                                                  borderRadius:
+                                                      BorderRadius.circular(10),
                                                   border: Border.all(
                                                       color: primaryTurquoise
-                                                          .withValues(alpha: 0.5),
+                                                          .withValues(
+                                                              alpha: 0.5),
                                                       width: 1),
                                                 ),
                                                 child: Row(
-                                                  mainAxisSize: MainAxisSize.min,
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
                                                   children: [
-                                                    const Icon(Icons.call_rounded,
-                                                        color: primaryTurquoise, size: 16),
+                                                    const Icon(
+                                                        Icons.call_rounded,
+                                                        color: primaryTurquoise,
+                                                        size: 16),
                                                     const SizedBox(width: 4),
                                                     Text("Call Driver",
                                                         style: GoogleFonts.urbanist(
-                                                            color: primaryTurquoise,
-                                                            fontWeight: FontWeight.bold,
+                                                            color:
+                                                                primaryTurquoise,
+                                                            fontWeight:
+                                                                FontWeight.bold,
                                                             fontSize: 13)),
                                                   ],
                                                 ),
@@ -1927,7 +2009,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                                       });
                                     },
                                     child: const Text("Book Another Ride",
-                                        style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
+                                        style: TextStyle(
+                                            color: Colors.white70,
+                                            fontWeight: FontWeight.bold)),
                                   ),
                                 ),
                               ],
@@ -1989,7 +2073,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
         ),
       );
     } else if (currentStatus == 'cancelled') {
-      final cancelReason = data['cancelReason']?.toString() ?? 'No specific reason';
+      final cancelReason =
+          data['cancelReason']?.toString() ?? 'No specific reason';
       AerorideVoiceHandler.speak(
           "Alert. Your trip has been cancelled due to: $cancelReason.");
 
@@ -2047,30 +2132,31 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Builder(
-                  builder: (context) {
-                    double displayFare = double.tryParse(data['fare'].toString()) ?? 0.0;
-                    if (data['status'] == 'cancelled') {
-                      final tier = (data['rideTier']?.toString() ?? 'tulia').trim().toLowerCase();
-                      if (tier == 'nuru') {
-                        displayFare = 350.0;
-                      } else if (tier == 'pamoja') {
-                        displayFare = 500.0;
-                      } else if (tier == 'waziri') {
-                        displayFare = 700.0;
-                      } else {
-                        displayFare = 150.0;
-                      }
+                Builder(builder: (context) {
+                  double displayFare =
+                      double.tryParse(data['fare'].toString()) ?? 0.0;
+                  if (data['status'] == 'cancelled') {
+                    final tier = (data['rideTier']?.toString() ?? 'tulia')
+                        .trim()
+                        .toLowerCase();
+                    if (tier == 'nuru') {
+                      displayFare = 350.0;
+                    } else if (tier == 'pamoja') {
+                      displayFare = 500.0;
+                    } else if (tier == 'waziri') {
+                      displayFare = 700.0;
+                    } else {
+                      displayFare = 150.0;
                     }
-                    return Text(
-                      "Fare Amount: KES ${displayFare.toStringAsFixed(0)}",
-                      style: GoogleFonts.urbanist(
-                          color: primaryTurquoise,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold),
-                    );
                   }
-                ),
+                  return Text(
+                    "Fare Amount: KES ${displayFare.toStringAsFixed(0)}",
+                    style: GoogleFonts.urbanist(
+                        color: primaryTurquoise,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold),
+                  );
+                }),
                 const SizedBox(height: 16),
                 TextField(
                   controller: _mpesaPhoneController,
@@ -2099,7 +2185,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                     double actualFare =
                         double.tryParse(data['fare'].toString()) ?? 1.0;
                     if (data['status'] == 'cancelled') {
-                      final tier = (data['rideTier']?.toString() ?? 'tulia').trim().toLowerCase();
+                      final tier = (data['rideTier']?.toString() ?? 'tulia')
+                          .trim()
+                          .toLowerCase();
                       if (tier == 'nuru') {
                         actualFare = 350.0;
                       } else if (tier == 'pamoja') {
@@ -2114,7 +2202,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                         currentRideId ?? data['rideId'] ?? "UNKNOWN_RIDE";
 
                     final scaffold = ScaffoldMessenger.of(context);
-                    
+
                     Navigator.of(formCtx).pop(); // Close form dialog
 
                     showDialog(
@@ -2125,7 +2213,8 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                               color: primaryTurquoise)),
                     );
 
-                    MpesaPaymentResult result = await PaymentService.requestMpesaPrompt(
+                    MpesaPaymentResult result =
+                        await PaymentService.requestMpesaPrompt(
                       rawPhone: enteredPhone,
                       amount: actualFare,
                       context: context,
@@ -2133,34 +2222,51 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                     );
 
                     if (context.mounted) {
-                      Navigator.of(context, rootNavigator: true).pop(); // Dismiss loading
+                      Navigator.of(context, rootNavigator: true)
+                          .pop(); // Dismiss loading
                     }
 
                     if (result.status == 'COMPLETED') {
+                      List<String> parts = result.status.split(':');
+                      String mpesaReferenceCode =
+                          parts.length > 1 ? parts[1] : 'M-PESA-OK';
                       // Mark ride as paid and record transaction reference
                       await firestore
                           .collection('rides')
                           .doc(activeRideId)
                           .update({
-                            'paymentStatus': 'paid',
-                            if (result.transactionCode != null) 'mpesaReference': result.transactionCode,
-                          });
+                        'paymentStatus': 'paid',
+                        'mpesaReference': mpesaReferenceCode,
+                        'paymentTimestamp': FieldValue.serverTimestamp(),
+                        if (result.transactionCode != null)
+                          'mpesaReference': result.transactionCode,
+                      });
 
                       // Credit 100% of cancellation fee to the assigned driver
                       // (Driver wasted time showing up — they keep the full cancellation fee)
                       try {
-                        final rideDoc = await firestore.collection('rides').doc(activeRideId).get();
+                        final rideDoc = await firestore
+                            .collection('rides')
+                            .doc(activeRideId)
+                            .get();
                         final rideData = rideDoc.data();
-                        final String? driverId = rideData?['driverId'] as String?;
+                        final String? driverId =
+                            rideData?['driverId'] as String?;
                         final num fee = (rideData?['fare'] as num?) ?? 0;
 
                         if (driverId != null && fee > 0) {
-                          await firestore.collection('users').doc(driverId).update({
+                          await firestore
+                              .collection('users')
+                              .doc(driverId)
+                              .update({
                             'earnings': FieldValue.increment(fee),
                             'cancellationEarnings': FieldValue.increment(fee),
                           });
                           // Log the cancellation payout for admin visibility
-                          await firestore.collection('rides').doc(activeRideId).update({
+                          await firestore
+                              .collection('rides')
+                              .doc(activeRideId)
+                              .update({
                             'driverEarnings': fee,
                             'platformFee': 0,
                             'cancellationPaidToDriver': true,
@@ -2173,8 +2279,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                           currentRideId = null;
                         });
                         scaffold.showSnackBar(
-                          const SnackBar(
-                              content: Text("✅ Payment Successful!"),
+                          SnackBar(
+                              content: Text(
+                                  "✅ Payment Successful! Ref: $mpesaReferenceCode"),
                               backgroundColor: Colors.green),
                         );
                       }
@@ -2345,13 +2452,16 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
               onPressed: () async {
                 String note = localSosController.text.trim();
-                
+
                 final user = FirebaseAuth.instance.currentUser;
                 String? userName;
                 String? userEmail;
-                
+
                 if (user != null) {
-                  final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+                  final userDoc = await FirebaseFirestore.instance
+                      .collection('users')
+                      .doc(user.uid)
+                      .get();
                   if (userDoc.exists) {
                     final data = userDoc.data();
                     userName = data?['name'];
