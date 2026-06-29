@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:convert';
 import 'dart:async';
 
@@ -11,6 +12,7 @@ class PaymentService {
     required String rawPhone,
     required double amount,
     required BuildContext context,
+    String? rideId,
   }) async {
     String formattedPhone = rawPhone.trim();
     if (formattedPhone.startsWith('0')) {
@@ -29,24 +31,36 @@ class PaymentService {
         final data = jsonDecode(response.body);
         String invoiceId = data['invoice']['invoice_id'];
 
-        // 2. Start checking the status every 4 seconds (Long polling)
-        for (int i = 0; i < 10; i++) {
-          await Future.delayed(const Duration(seconds: 3));
+        // 2. Start checking the status every 3 seconds (Long polling)
+        for (int i = 0; i < 15; i++) { // Check up to 15 times
+          await Future.delayed(const Duration(seconds: 2));
 
-          final statusCheck = await http
-              .get(Uri.parse('$_backendUrl/payment-status/$invoiceId'));
-          if (statusCheck.statusCode == 200) {
-            final statusData = jsonDecode(statusCheck.body);
-            String state = statusData[
-                'state']; // 'PENDING', 'PROCESSING', 'COMPLETED', or 'FAILED'
-
-            if (state == 'COMPLETE' || state == 'COMPLETED') {
-              return 'COMPLETED';
-            }
-            if (state == 'FAILED' || state == 'REJECTED') {
-              return 'FAILED';
-            }
+          // A. Check Firestore first (fastest and most reliable if webhook succeeds)
+          if (rideId != null) {
+            try {
+              final doc = await FirebaseFirestore.instance.collection('rides').doc(rideId).get();
+              if (doc.exists && doc.data()?['paymentStatus'] == 'paid') {
+                return 'COMPLETED';
+              }
+            } catch (_) {}
           }
+
+          // B. Check backend API status
+          try {
+            final statusCheck = await http
+                .get(Uri.parse('$_backendUrl/payment-status/$invoiceId'));
+            if (statusCheck.statusCode == 200) {
+              final statusData = jsonDecode(statusCheck.body);
+              String state = statusData['state']; // 'PENDING', 'PROCESSING', 'COMPLETED', or 'FAILED'
+
+              if (state == 'COMPLETE' || state == 'COMPLETED') {
+                return 'COMPLETED';
+              }
+              if (state == 'FAILED' || state == 'REJECTED') {
+                return 'FAILED';
+              }
+            }
+          } catch (_) {}
         }
         return 'TIMEOUT';
       }

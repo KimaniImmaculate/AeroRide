@@ -1500,15 +1500,31 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text("Estimated Fare",
+                              Text(
+                                  currentStatus == 'cancelled'
+                                      ? "Cancellation Fee"
+                                      : "Estimated Fare",
                                   style: GoogleFonts.urbanist(
                                       color: Colors.white,
                                       fontWeight: FontWeight.w600)),
-                              Text("KES ${data['fare']}",
-                                  style: GoogleFonts.urbanist(
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.w900,
-                                      color: primaryTurquoise)),
+                              Builder(
+                                builder: (context) {
+                                  double displayFare = double.tryParse(data['fare'].toString()) ?? 0.0;
+                                  if (currentStatus == 'cancelled') {
+                                    final tier = data['rideTier'] ?? 'tulia';
+                                    if (tier == 'tulia') displayFare = 150.0;
+                                    else if (tier == 'nuru') displayFare = 350.0;
+                                    else if (tier == 'pamoja') displayFare = 500.0;
+                                    else if (tier == 'waziri') displayFare = 700.0;
+                                  }
+                                  return Text(
+                                      "KES ${displayFare.toStringAsFixed(0)}",
+                                      style: GoogleFonts.urbanist(
+                                          fontSize: 24,
+                                          fontWeight: FontWeight.w900,
+                                          color: primaryTurquoise));
+                                }
+                              ),
                             ],
                           ),
                         ),
@@ -2024,12 +2040,24 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  "Fare Amount: KES ${data['fare']}",
-                  style: GoogleFonts.urbanist(
-                      color: primaryTurquoise,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold),
+                Builder(
+                  builder: (context) {
+                    double displayFare = double.tryParse(data['fare'].toString()) ?? 0.0;
+                    if (data['status'] == 'cancelled') {
+                      final tier = data['rideTier'] ?? 'tulia';
+                      if (tier == 'tulia') displayFare = 150.0;
+                      else if (tier == 'nuru') displayFare = 350.0;
+                      else if (tier == 'pamoja') displayFare = 500.0;
+                      else if (tier == 'waziri') displayFare = 700.0;
+                    }
+                    return Text(
+                      "Fare Amount: KES ${displayFare.toStringAsFixed(0)}",
+                      style: GoogleFonts.urbanist(
+                          color: primaryTurquoise,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold),
+                    );
+                  }
                 ),
                 const SizedBox(height: 16),
                 TextField(
@@ -2058,6 +2086,13 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                     }
                     double actualFare =
                         double.tryParse(data['fare'].toString()) ?? 1.0;
+                    if (data['status'] == 'cancelled') {
+                      final tier = data['rideTier'] ?? 'tulia';
+                      if (tier == 'tulia') actualFare = 150.0;
+                      else if (tier == 'nuru') actualFare = 350.0;
+                      else if (tier == 'pamoja') actualFare = 500.0;
+                      else if (tier == 'waziri') actualFare = 700.0;
+                    }
                     String activeRideId =
                         currentRideId ?? data['rideId'] ?? "UNKNOWN_RIDE";
 
@@ -2075,6 +2110,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                       rawPhone: enteredPhone,
                       amount: actualFare,
                       context: context,
+                      rideId: activeRideId,
                     );
 
                     if (context.mounted) {
@@ -2087,6 +2123,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                           .doc(activeRideId)
                           .update({'paymentStatus': 'paid'});
                       if (context.mounted) {
+                        setState(() {
+                          currentRideId = null;
+                        });
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
                               content: Text("✅ Payment Successful!"),

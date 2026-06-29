@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:async';
+import 'package:intl/intl.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -851,6 +852,37 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                                 style: const TextStyle(color: Color(0xFF16a085), fontWeight: FontWeight.bold, fontSize: 11),
                                               ),
                                             ),
+                                            if (data['createdAt'] != null) ...[
+                                              const SizedBox(width: 8),
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.grey.shade100,
+                                                  borderRadius: BorderRadius.circular(30),
+                                                ),
+                                                child: Row(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  children: [
+                                                    Icon(Icons.access_time_rounded, size: 12, color: Colors.grey.shade600),
+                                                    const SizedBox(width: 4),
+                                                    Builder(
+                                                      builder: (context) {
+                                                        final dt = (data['createdAt'] as Timestamp).toDate();
+                                                        final now = DateTime.now();
+                                                        final isToday = dt.year == now.year && dt.month == now.month && dt.day == now.day;
+                                                        final formatted = isToday
+                                                            ? DateFormat('h:mm a').format(dt)
+                                                            : DateFormat('MMM d • h:mm a').format(dt);
+                                                        return Text(
+                                                          formatted,
+                                                          style: TextStyle(color: Colors.grey.shade700, fontWeight: FontWeight.bold, fontSize: 11),
+                                                        );
+                                                      },
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
                                           ],
                                         ),
                                         Column(
