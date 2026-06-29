@@ -733,6 +733,41 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                               .where('status', whereIn: ['accepted', 'arrived', 'started'])
                               .snapshots(),
                       builder: (context, activeSnapshot) {
+                        // Surface any Firestore errors (e.g. missing composite index)
+                        if (searchingSnapshot.hasError) {
+                          debugPrint('[Rides Stream] Searching error: ${searchingSnapshot.error}');
+                          return Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(24),
+                            margin: const EdgeInsets.only(bottom: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.red.shade50,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.red.shade200),
+                            ),
+                            child: Text(
+                              '⚠️ Could not load rides: ${searchingSnapshot.error}',
+                              style: TextStyle(color: Colors.red.shade800, fontSize: 13),
+                            ),
+                          );
+                        }
+                        if (activeSnapshot.hasError) {
+                          debugPrint('[Rides Stream] Active error: ${activeSnapshot.error}');
+                          return Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(24),
+                            margin: const EdgeInsets.only(bottom: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.red.shade50,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.red.shade200),
+                            ),
+                            child: Text(
+                              '⚠️ Could not load active ride: ${activeSnapshot.error}',
+                              style: TextStyle(color: Colors.red.shade800, fontSize: 13),
+                            ),
+                          );
+                        }
                         // Show spinner only while both streams are still loading
                         if (!searchingSnapshot.hasData || !activeSnapshot.hasData) {
                           return const Center(child: Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator()));
