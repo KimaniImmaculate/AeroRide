@@ -2041,7 +2041,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                         : Text(
                             isGuest
                                 ? "Login to Request Ride"
-                                : "Confirm & Request Ride",
+                                : "Confirm & Request Your Ride",
                             style: GoogleFonts.urbanist(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
@@ -2278,10 +2278,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                         });
                         scaffold.showSnackBar(
                           SnackBar(
-                              content: Text(
-                                  mpesaReferenceCode != null
-                                    ? "✅ Payment Successful! Ref: $mpesaReferenceCode"
-                                    : "✅ Payment Successful!"),
+                              content: Text(mpesaReferenceCode != null
+                                  ? "✅ Payment Successful! Ref: $mpesaReferenceCode"
+                                  : "✅ Payment Successful!"),
                               backgroundColor: Colors.green),
                         );
                       }
