@@ -2118,13 +2118,37 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                       rideId: activeRideId,
                     );
 
-                    nav.pop(); // Dismiss loading using the stable navigator reference
+                    nav.pop(); // Dismiss loading
 
                     if (result == 'COMPLETED') {
+                      // Mark ride as paid
                       await firestore
                           .collection('rides')
                           .doc(activeRideId)
                           .update({'paymentStatus': 'paid'});
+
+                      // Credit 100% of cancellation fee to the assigned driver
+                      // (Driver wasted time showing up — they keep the full cancellation fee)
+                      try {
+                        final rideDoc = await firestore.collection('rides').doc(activeRideId).get();
+                        final rideData = rideDoc.data();
+                        final String? driverId = rideData?['driverId'] as String?;
+                        final num fee = (rideData?['fare'] as num?) ?? 0;
+
+                        if (driverId != null && fee > 0) {
+                          await firestore.collection('users').doc(driverId).update({
+                            'earnings': FieldValue.increment(fee),
+                            'cancellationEarnings': FieldValue.increment(fee),
+                          });
+                          // Log the cancellation payout for admin visibility
+                          await firestore.collection('rides').doc(activeRideId).update({
+                            'driverEarnings': fee,
+                            'platformFee': 0,
+                            'cancellationPaidToDriver': true,
+                          });
+                        }
+                      } catch (_) {}
+
                       if (mounted) {
                         setState(() {
                           currentRideId = null;
@@ -2136,14 +2160,21 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                         );
                       }
                     } else {
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
+                      // Payment was rejected or timed out — re-open the form so the rider can try again
+                      if (mounted) {
+                        final msg = result == 'FAILED'
+                            ? "❌ Payment rejected. Please try again."
+                            : "⏳ Payment timed out. Please try again.";
+                        scaffold.showSnackBar(
                           SnackBar(
-                              content: Text(result == 'FAILED'
-                                  ? "❌ Payment Failed"
-                                  : "⏳ Timeout"),
-                              backgroundColor: Colors.red),
+                            content: Text(msg),
+                            backgroundColor: Colors.red,
+                            duration: const Duration(seconds: 3),
+                          ),
                         );
+                        // Re-open the payment form after a short delay
+                        await Future.delayed(const Duration(milliseconds: 300));
+                        if (mounted) _showPaymentForm(context, data);
                       }
                     }
                   },

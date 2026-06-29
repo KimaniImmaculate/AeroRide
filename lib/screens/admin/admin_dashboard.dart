@@ -175,6 +175,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
         double grossRevenue = 0;
         double platformRevenue = 0;
         double driverPayouts = 0;
+        double cancellationRevenue = 0;
 
         for (var ride in rideSnapshot.data!.docs) {
           final data = ride.data() as Map<String, dynamic>;
@@ -192,7 +193,16 @@ class _AdminDashboardState extends State<AdminDashboard> {
             }
           } else if (data['status'] == 'cancelled') {
             cancelledRides++;
+            // Count paid cancellation fees — 100% goes to driver, 0% to platform
+            if (data['paymentStatus'] == 'paid' && data['fare'] != null) {
+              final fee = (data['fare'] as num).toDouble();
+              grossRevenue += fee;
+              driverPayouts += fee; // 100% to driver
+              cancellationRevenue += fee;
+              // platformRevenue += 0 (platform takes nothing on cancellations)
+            }
           }
+
         }
 
         final allRides = rideSnapshot.data!.docs.toList();
@@ -219,6 +229,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     grossRevenue: grossRevenue,
                     platformRevenue: platformRevenue,
                     driverPayouts: driverPayouts,
+                    cancellationRevenue: cancellationRevenue,
                   ),
                   const SizedBox(height: 48),
                   _buildAdminRideHistoryList(allRides),
@@ -369,8 +380,24 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       Padding(
                         padding: const EdgeInsets.only(top: 8.0),
                         child: Text(
-                          "Driver Payout: KES ${(data['driverEarnings'] ?? ((data['fare'] as num).toDouble() * 0.75))} | Platform Fee: KES ${(data['platformFee'] ?? ((data['fare'] as num).toDouble() * 0.25))}",
+                          "Driver Payout: KES ${(data['driverEarnings'] ?? ((data['fare'] as num).toDouble() * 0.75)).toStringAsFixed(0)} (75%) | Platform Fee: KES ${(data['platformFee'] ?? ((data['fare'] as num).toDouble() * 0.25)).toStringAsFixed(0)} (25%)",
                           style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.blueGrey),
+                        ),
+                      ),
+                    if (status == 'cancelled' && data['paymentStatus'] == 'paid' && data['fare'] != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.orange.shade200),
+                          ),
+                          child: Text(
+                            "Cancellation Fee: KES ${data['fare']} → Driver Payout: 100% | Platform: 0%",
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.orange.shade800),
+                          ),
                         ),
                       ),
                   ],
@@ -443,41 +470,136 @@ class _AdminDashboardState extends State<AdminDashboard> {
                             padding: const EdgeInsets.only(top: 8.0),
                             child: GestureDetector(
                               onTap: () {
+                                final bool isVerified = data['vehicleVerified'] == true;
                                 showDialog(
                                   context: context,
-                                  builder: (context) => Dialog(
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        data['vehicleImageUrl'].toString().startsWith('data:image')
-                                            ? Image.memory(base64Decode(data['vehicleImageUrl'].toString().split(',').last))
-                                            : Image.network(data['vehicleImageUrl']),
-                                        Padding(
-                                          padding: const EdgeInsets.all(16.0),
-                                          child: Text(
-                                            "Tier: ${(data['carTier'] ?? 'tulia').toUpperCase()}",
-                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                  builder: (dialogCtx) => Dialog(
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(16),
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            "Vehicle Verification",
+                                            style: GoogleFonts.urbanist(fontSize: 18, fontWeight: FontWeight.bold),
                                           ),
-                                        ),
-                                        TextButton(
-                                          onPressed: () => Navigator.pop(context),
-                                          child: const Text("Close"),
-                                        ),
-                                        const SizedBox(height: 8),
-                                      ],
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            "${data['name'] ?? email} — Tier: ${(data['carTier'] ?? 'tulia').toUpperCase()}",
+                                            style: GoogleFonts.urbanist(color: Colors.grey),
+                                          ),
+                                          const SizedBox(height: 12),
+                                          ClipRRect(
+                                            borderRadius: BorderRadius.circular(12),
+                                            child: data['vehicleImageUrl'].toString().startsWith('data:image')
+                                                ? Image.memory(
+                                                    base64Decode(data['vehicleImageUrl'].toString().split(',').last),
+                                                    fit: BoxFit.contain,
+                                                    width: double.infinity,
+                                                  )
+                                                : Image.network(
+                                                    data['vehicleImageUrl'],
+                                                    fit: BoxFit.contain,
+                                                    width: double.infinity,
+                                                  ),
+                                          ),
+                                          const SizedBox(height: 16),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                            decoration: BoxDecoration(
+                                              color: isVerified ? Colors.green.shade50 : Colors.orange.shade50,
+                                              borderRadius: BorderRadius.circular(8),
+                                              border: Border.all(color: isVerified ? Colors.green.shade300 : Colors.orange.shade300),
+                                            ),
+                                            child: Text(
+                                              isVerified ? "✅ Approved" : "⏳ Pending Approval",
+                                              style: TextStyle(
+                                                color: isVerified ? Colors.green.shade800 : Colors.orange.shade800,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 16),
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: OutlinedButton.icon(
+                                                  icon: const Icon(Icons.close, color: Colors.red),
+                                                  label: const Text("Reject", style: TextStyle(color: Colors.red)),
+                                                  style: OutlinedButton.styleFrom(
+                                                    side: const BorderSide(color: Colors.red),
+                                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                                  ),
+                                                  onPressed: () async {
+                                                    await firestore.collection('users').doc(userDoc.id).update({
+                                                      'vehicleVerified': false,
+                                                      'vehicleImageUrl': FieldValue.delete(),
+                                                    });
+                                                    if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+                                                    if (context.mounted) {
+                                                      ScaffoldMessenger.of(context).showSnackBar(
+                                                        const SnackBar(content: Text("❌ Vehicle photo rejected & cleared."), backgroundColor: Colors.red),
+                                                      );
+                                                    }
+                                                  },
+                                                ),
+                                              ),
+                                              const SizedBox(width: 12),
+                                              Expanded(
+                                                child: ElevatedButton.icon(
+                                                  icon: const Icon(Icons.check, color: Colors.white),
+                                                  label: const Text("Approve", style: TextStyle(color: Colors.white)),
+                                                  style: ElevatedButton.styleFrom(
+                                                    backgroundColor: Colors.green.shade700,
+                                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                                  ),
+                                                  onPressed: () async {
+                                                    await firestore.collection('users').doc(userDoc.id).update({
+                                                      'vehicleVerified': true,
+                                                    });
+                                                    if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+                                                    if (context.mounted) {
+                                                      ScaffoldMessenger.of(context).showSnackBar(
+                                                        const SnackBar(content: Text("✅ Vehicle approved successfully!"), backgroundColor: Colors.green),
+                                                      );
+                                                    }
+                                                  },
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 4),
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(dialogCtx),
+                                            child: const Text("Close"),
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 );
                               },
                               child: Row(
                                 children: [
-                                  const Icon(Icons.image, size: 16, color: Colors.blue),
+                                  Icon(
+                                    data['vehicleVerified'] == true ? Icons.verified_rounded : Icons.image_rounded,
+                                    size: 16,
+                                    color: data['vehicleVerified'] == true ? Colors.green : Colors.orange,
+                                  ),
                                   const SizedBox(width: 4),
-                                  Text("View Vehicle Photo", style: GoogleFonts.urbanist(color: Colors.blue, fontWeight: FontWeight.bold)),
+                                  Text(
+                                    data['vehicleVerified'] == true ? "Vehicle Approved ✅" : "Review Vehicle Photo ⏳",
+                                    style: GoogleFonts.urbanist(
+                                      color: data['vehicleVerified'] == true ? Colors.green : Colors.orange,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
                                 ],
                               ),
                             ),
                           ),
+
                       ],
                     ),
                     trailing: Row(
@@ -831,6 +953,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
     required double grossRevenue,
     required double platformRevenue,
     required double driverPayouts,
+    required double cancellationRevenue,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -874,7 +997,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text("Gross Revenue (Rider Payments)", style: TextStyle(fontSize: 12, color: Colors.green.shade800, fontWeight: FontWeight.bold)),
+                              Text("Gross Revenue (All Payments)", style: TextStyle(fontSize: 12, color: Colors.green.shade800, fontWeight: FontWeight.bold)),
                               const SizedBox(height: 4),
                               Text("KES ${grossRevenue.toStringAsFixed(0)}", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.green.shade900)),
                             ],
@@ -885,7 +1008,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text("Platform Revenue (25%)", style: TextStyle(fontSize: 14, color: Colors.green.shade900, fontWeight: FontWeight.w500)),
+                          Text("Platform Revenue (trips, 25%)", style: TextStyle(fontSize: 14, color: Colors.green.shade900, fontWeight: FontWeight.w500)),
                           Text("KES ${platformRevenue.toStringAsFixed(0)}", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.green.shade900)),
                         ],
                       ),
@@ -893,10 +1016,20 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text("Driver Payouts (75%)", style: TextStyle(fontSize: 14, color: Colors.green.shade900, fontWeight: FontWeight.w500)),
+                          Text("Driver Payouts (trips + cancellations)", style: TextStyle(fontSize: 14, color: Colors.green.shade900, fontWeight: FontWeight.w500)),
                           Text("KES ${driverPayouts.toStringAsFixed(0)}", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.green.shade900)),
                         ],
                       ),
+                      if (cancellationRevenue > 0) ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text("  ↳ Of which, cancellation fees", style: TextStyle(fontSize: 12, color: Colors.orange.shade800, fontWeight: FontWeight.w500)),
+                            Text("KES ${cancellationRevenue.toStringAsFixed(0)}", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.orange.shade800)),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),

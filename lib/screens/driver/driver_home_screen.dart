@@ -643,7 +643,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                   const SizedBox(height: 4),
                                   Text(
                                     uploadedUrl != null
-                                        ? "Vehicle photo uploaded. Status: ${isWaziriTier ? 'Approved (Waziri Premium)' : 'Pending Admin Verification'}"
+                                        ? "Vehicle photo uploaded. Status: ${data['vehicleVerified'] == true ? '✅ Approved by Admin' : '⏳ Pending Admin Verification'}"
                                         : "Please upload an exterior photo of your vehicle for tier verification.",
                                     style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
                                   ),
@@ -659,12 +659,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                 children: [
                                   ClipRRect(
                                     borderRadius: BorderRadius.circular(8),
-                                    child: Image.network(
-                                      uploadedUrl,
-                                      width: 80,
-                                      height: 60,
-                                      fit: BoxFit.cover,
-                                    ),
+                                    child: uploadedUrl.startsWith('data:image')
+                                        ? Image.memory(
+                                            base64Decode(uploadedUrl.split(',').last),
+                                            width: 80,
+                                            height: 60,
+                                            fit: BoxFit.cover,
+                                          )
+                                        : Image.network(
+                                            uploadedUrl,
+                                            width: 80,
+                                            height: 60,
+                                            fit: BoxFit.cover,
+                                          ),
                                   ),
                                   GestureDetector(
                                     onTap: _uploadVehiclePhoto,
@@ -824,10 +831,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        Row(
+                                        // Top row: status + tier + timestamp chips
+                                        Wrap(
+                                          spacing: 6,
+                                          runSpacing: 6,
                                           children: [
                                             Container(
                                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -840,7 +850,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                                 style: TextStyle(color: _getStatusColor(data['status']), fontWeight: FontWeight.bold, fontSize: 12),
                                               ),
                                             ),
-                                            const SizedBox(width: 8),
                                             Container(
                                               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                                               decoration: BoxDecoration(
@@ -852,8 +861,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                                 style: const TextStyle(color: Color(0xFF16a085), fontWeight: FontWeight.bold, fontSize: 11),
                                               ),
                                             ),
-                                            if (data['createdAt'] != null) ...[
-                                              const SizedBox(width: 8),
+                                            if (data['createdAt'] != null)
                                               Container(
                                                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                                                 decoration: BoxDecoration(
@@ -882,27 +890,32 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                                   ],
                                                 ),
                                               ),
-                                            ],
                                           ],
                                         ),
-                                        Column(
-                                          crossAxisAlignment: CrossAxisAlignment.end,
-                                          children: [
-                                            Text(
-                                              "Fare: KES ${data['fare']}",
-                                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
-                                            ),
-                                            if (data['status'] == 'completed') ...[
-                                              const SizedBox(height: 4),
+                                        const SizedBox(height: 10),
+                                        // Bottom row: fare aligned right
+                                        Align(
+                                          alignment: Alignment.centerRight,
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.end,
+                                            children: [
                                               Text(
-                                                "You earn: KES ${(data['driverEarnings'] ?? (data['fare'] * 0.75)).toStringAsFixed(0)} (75%)",
-                                                style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontWeight: FontWeight.w500),
+                                                "Fare: KES ${data['fare']}",
+                                                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
                                               ),
+                                              if (data['status'] == 'completed') ...[
+                                                const SizedBox(height: 2),
+                                                Text(
+                                                  "You earn: KES ${(data['driverEarnings'] ?? (data['fare'] * 0.75)).toStringAsFixed(0)} (75%)",
+                                                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontWeight: FontWeight.w500),
+                                                ),
+                                              ],
                                             ],
-                                          ],
+                                          ),
                                         ),
                                       ],
                                     ),
+
                                     const SizedBox(height: 16),
                                     _buildLocationLine(Icons.radio_button_checked_rounded, Colors.blue, "Pickup Location", data['pickup']),
                                     const Padding(
