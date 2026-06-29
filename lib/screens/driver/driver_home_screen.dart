@@ -36,7 +36,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       imageQuality: 80,
     );
 
-    if (image == null) return;
+    if (image == null) {
+      debugPrint('[Vehicle Upload] No image selected');
+      return;
+    }
 
     setState(() {
       isUploadingImage = true;
@@ -44,22 +47,34 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
     try {
       final currentUser = FirebaseAuth.instance.currentUser;
-      if (currentUser == null) return;
+      if (currentUser == null) {
+        debugPrint('[Vehicle Upload] Error: currentUser is null');
+        return;
+      }
 
+      debugPrint('[Vehicle Upload] Starting upload process for user: ${currentUser.uid}');
       final storageRef = FirebaseStorage.instance
           .ref()
           .child('driver_vehicles')
           .child('${currentUser.uid}.jpg');
 
+      debugPrint('[Vehicle Upload] Reading image bytes...');
       final bytes = await image.readAsBytes();
+      
+      debugPrint('[Vehicle Upload] Initiating storage upload task...');
       final uploadTask = storageRef.putData(
         bytes,
         SettableMetadata(contentType: 'image/jpeg'),
       );
 
-      final snapshot = await uploadTask;
-      final downloadUrl = await snapshot.ref.getDownloadURL();
+      // Add a 15-second timeout to prevent the upload from hanging indefinitely on network or CORS issues
+      debugPrint('[Vehicle Upload] Awaiting upload task completion (with 15s timeout)...');
+      final snapshot = await uploadTask.timeout(const Duration(seconds: 15));
+      
+      debugPrint('[Vehicle Upload] Upload completed. Fetching download URL...');
+      final downloadUrl = await snapshot.ref.getDownloadURL().timeout(const Duration(seconds: 10));
 
+      debugPrint('[Vehicle Upload] Updating Firestore user document with vehicleImageUrl: $downloadUrl');
       await firestore.collection('users').doc(currentUser.uid).update({
         'vehicleImageUrl': downloadUrl,
       });
@@ -73,6 +88,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         );
       }
     } catch (e) {
+      debugPrint('[Vehicle Upload] Exception encountered: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
