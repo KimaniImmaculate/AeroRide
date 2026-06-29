@@ -150,24 +150,53 @@ class AerorideVoiceHandler {
         throw const FormatException("Invalid transit details: 'origin' or 'destination' are missing for a book intent.");
       }
 
-      // Geocode using geocoding package
-      debugPrint("[AerorideVoiceHandler] Geocoding origin and destination to coordinates...");
-      
-      final originLocations = await locationFromAddress(originName);
-      final destLocations = await locationFromAddress(destinationName);
+      double? originLat;
+      double? originLng;
+      String resolvedOrigin = originName;
 
-      if (originLocations.isEmpty || destLocations.isEmpty) {
-         throw Exception("Failed to geocode origin or destination.");
+      double? destLat;
+      double? destLng;
+      String resolvedDest = destinationName;
+
+      if (kIsWeb) {
+        debugPrint("[AerorideVoiceHandler] Web platform: Geocoding via JS Google Maps Geocoder...");
+        final originGeo = await _geocodeAddressWeb(originName);
+        if (originGeo == null) {
+          throw Exception("Failed to geocode origin on Web: $originName");
+        }
+        originLat = originGeo.latitude;
+        originLng = originGeo.longitude;
+        resolvedOrigin = originGeo.formattedAddress;
+
+        final destGeo = await _geocodeAddressWeb(destinationName);
+        if (destGeo == null) {
+          throw Exception("Failed to geocode destination on Web: $destinationName");
+        }
+        destLat = destGeo.latitude;
+        destLng = destGeo.longitude;
+        resolvedDest = destGeo.formattedAddress;
+      } else {
+        debugPrint("[AerorideVoiceHandler] Mobile platform: Geocoding via geocoding package...");
+        final originLocations = await locationFromAddress(originName);
+        final destLocations = await locationFromAddress(destinationName);
+
+        if (originLocations.isEmpty || destLocations.isEmpty) {
+           throw Exception("Failed to geocode origin or destination on Mobile.");
+        }
+        originLat = originLocations.first.latitude;
+        originLng = originLocations.first.longitude;
+        destLat = destLocations.first.latitude;
+        destLng = destLocations.first.longitude;
       }
 
       return VoiceBookingResult(
         intent: intent,
-        origin: originName,
-        originLat: originLocations.first.latitude,
-        originLng: originLocations.first.longitude,
-        destination: destinationName,
-        destinationLat: destLocations.first.latitude,
-        destinationLng: destLocations.first.longitude,
+        origin: resolvedOrigin,
+        originLat: originLat,
+        originLng: originLng,
+        destination: resolvedDest,
+        destinationLat: destLat,
+        destinationLng: destLng,
         rideTier: ['tulia', 'nuru', 'pamoja', 'waziri'].contains(tier) ? tier : 'tulia',
         notes: notes,
       );
@@ -178,12 +207,55 @@ class AerorideVoiceHandler {
     }
   }
 
+  /// Web-specific forward geocoding helper invoking Google Maps Geocoder in the browser.
+  static Future<_GeocodeResult?> _geocodeAddressWeb(String address) async {
+    final completer = Completer<_GeocodeResult?>();
+    
+    void handleGeocodeResponse(JSString jsonResult, JSString status) {
+      try {
+        final dartStatus = status.toDart;
+        if (dartStatus == 'OK') {
+          final data = jsonDecode(jsonResult.toDart) as Map<String, dynamic>;
+          final double lat = (data['lat'] as num).toDouble();
+          final double lng = (data['lng'] as num).toDouble();
+          final String formattedAddress = data['formatted_address'] as String;
+          completer.complete(_GeocodeResult(
+            latitude: lat,
+            longitude: lng,
+            formattedAddress: formattedAddress,
+          ));
+        } else {
+          debugPrint("[AerorideVoiceHandler] Web Geocoder returned status: $dartStatus");
+          completer.complete(null);
+        }
+      } catch (e) {
+        debugPrint("[AerorideVoiceHandler] Error parsing web geocode response: $e");
+        completer.complete(null);
+      }
+    }
+
+    if (globalContext.has('aerorideGeocodeAddress')) {
+      globalContext.callMethodVarArgs(
+        'aerorideGeocodeAddress'.toJS,
+        [
+          address.toJS,
+          handleGeocodeResponse.toJS,
+        ],
+      );
+    } else {
+      debugPrint("[AerorideVoiceHandler] JS function 'aerorideGeocodeAddress' not found.");
+      completer.complete(null);
+    }
+
+    return completer.future;
+  }
+
   /// Initiates the native voice-to-booking pipeline.
   /// Resolves the voice input audio using Gemini,
   /// saves the extracted intent parameters into Cloud Firestore,
   /// and notifies the frontend via the [onBookingConfirmed] callback.
   static Future<void> startVoiceBookingPipeline({
-    required String audioBlobUrl, // Carrying base64 audio payload now to preserve existing method signature hooks
+    required String audioBlobUrl,
     required VoidCallback onBookingConfirmed,
   }) async {
     final result = await decodeVoiceToIntent(audioBlobUrl);
@@ -200,13 +272,25 @@ class AerorideVoiceHandler {
       'rider_id': currentUser?.uid ?? 'immakym001',
       'status': 'searching_drivers',
       'created_at': FieldValue.serverTimestamp(),
-      'rideTier': result.rideTier ?? 'tulia', // Default to standard tier to satisfy database constraints
-      'estimatedFare': 350, // Default estimated fare to satisfy database constraints
+      'rideTier': result.rideTier ?? 'tulia',
+      'estimatedFare': 350,
     });
 
     debugPrint("[AerorideVoiceHandler] Document successfully saved to Cloud Firestore.");
 
-    // Execute execution callback to invoke booking state engine programmatically
     onBookingConfirmed();
   }
 }
+
+class _GeocodeResult {
+  final double latitude;
+  final double longitude;
+  final String formattedAddress;
+
+  _GeocodeResult({
+    required this.latitude,
+    required this.longitude,
+    required this.formattedAddress,
+  });
+}
+

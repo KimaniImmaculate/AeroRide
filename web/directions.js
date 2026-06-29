@@ -96,3 +96,27 @@ window.aerorideGetPlaceName = function(lat, lng, apiKey, callback) {
     });
   });
 };
+
+window.aerorideGeocodeAddress = function(address, callback) {
+  aerorideWaitForGoogleMaps(100, function(isReady) {
+    if (!isReady) {
+      callback(JSON.stringify({ status: 'NO_MAPS' }), 'NO_MAPS');
+      return;
+    }
+    var geocoder = new google.maps.Geocoder();
+    geocoder.geocode({ address: address }, function(results, status) {
+      if (status === 'OK' && results[0] && results[0].geometry && results[0].geometry.location) {
+        var loc = results[0].geometry.location;
+        var payload = {
+          status: 'OK',
+          lat: loc.lat(),
+          lng: loc.lng(),
+          formatted_address: results[0].formatted_address
+        };
+        callback(JSON.stringify(payload), status);
+      } else {
+        callback(JSON.stringify({ status: status || 'ERROR' }), status || 'ERROR');
+      }
+    });
+  });
+};
