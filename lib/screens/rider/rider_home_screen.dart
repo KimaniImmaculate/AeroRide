@@ -1209,7 +1209,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                     Navigator.push(
                         context,
                         MaterialPageRoute(
-                            builder: (_) => const HistoryScreen()));
+                            builder: (_) => const HistoryScreen(isDriver: false)));
                   },
                   icon:
                       const Icon(Icons.history_rounded, color: Colors.white70),

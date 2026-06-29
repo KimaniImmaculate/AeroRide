@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 
@@ -11,6 +12,26 @@ class HistoryScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final currentUser = FirebaseAuth.instance.currentUser;
+
+    // Guard: if somehow not signed in, show nothing
+    if (currentUser == null) {
+      return Scaffold(
+        backgroundColor: const Color(0xFF0F1715),
+        body: Center(
+          child: Text('Not signed in',
+              style: GoogleFonts.urbanist(color: Colors.white54)),
+        ),
+      );
+    }
+
+    // ✅ FIX: Filter by the current user's UID so Firestore security rules pass.
+    //    Rules require request.auth.uid == resource.data.userId (rider)
+    //    or request.auth.uid == resource.data.driverId (driver).
+    //    An unfiltered query is rejected because Firestore cannot evaluate
+    //    resource.data for every document before the query resolves.
+    final String uidField = isDriver ? 'driverId' : 'riderId';
+
     return Scaffold(
       backgroundColor: const Color(0xFF0F1715),
       appBar: AppBar(
@@ -25,6 +46,7 @@ class HistoryScreen extends StatelessWidget {
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
             .collection('rides')
+            .where(uidField, isEqualTo: currentUser.uid)
             .where('status', isEqualTo: 'completed')
             .snapshots(),
         builder: (context, snapshot) {

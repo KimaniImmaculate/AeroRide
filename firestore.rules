@@ -33,8 +33,8 @@ service cloud.firestore {
     function isCandidateDriverRide(data) {
       return signedIn() &&
         data.status == 'searching' &&
-        data.keys().hasAny(['candidateDrivers']) &&
-        data.candidateDrivers.hasAny([request.auth.uid]);
+        'candidateDrivers' in data &&
+        request.auth.uid in data.candidateDrivers;
     }
 
     // ✅ IMMERSIVE STATE MACHINE: Regulates proper sequential status flows
@@ -65,9 +65,17 @@ service cloud.firestore {
     }
 
     match /rides/{rideId} {
-      allow read: if isAdmin() || isRideParticipant(resource.data) || isCandidateDriverRide(resource.data) || (
-        signedIn() && resource.data.status == 'searching'
-      );
+      // ✅ HISTORY QUERY FIX: Explicit uid field checks allow Firestore collection
+      //    queries (e.g. for ride history) to resolve without needing resource.data
+      //    to be pre-loaded — rules are not filters, so query-compatible clauses
+      //    must be present for list operations to succeed.
+      allow read: if isAdmin()
+        || isRideParticipant(resource.data)
+        || isCandidateDriverRide(resource.data)
+        || (signedIn() && resource.data.status == 'searching')
+        || (signedIn() && request.auth.uid == resource.data.userId)
+        || (signedIn() && request.auth.uid == resource.data.driverId)
+        || (signedIn() && request.auth.uid == resource.data.riderId);
 
       // ✅ TAXIMETER SECURITY INJECTION: Enforces presence of verified Swahili atmospheric parameters upon request submission
       allow create: if signedIn()

@@ -3,7 +3,6 @@
 
 AeroRide is a next-generation, premium ride-hailing application designed with a focus on dark-theme aesthetics, role-based safety, and hands-free, voice-native operations powered by Google Gemini.
 
----
 
 ## 🔗 Live Links
 
@@ -14,7 +13,6 @@ AeroRide is a next-generation, premium ride-hailing application designed with a 
 
 > The landing website includes a **"Get Started"** CTA button that takes you directly to the web app.
 
----
 
 ## 🌟 Key Innovations & USPs
 
@@ -39,7 +37,6 @@ Unlike traditional applications that only allow voice typing, AeroRide features 
 *   **Anti-Spam Registration:** Driver accounts can only be provisioned by an administrator on the dashboard, preventing unauthorized/unverified operators.
 *   **Profile Review:** Driver updates (license changes, vehicle tier changes) are sent as formal request documents to the admin tab for resolution.
 
----
 
 ## 🛠️ Technology Stack
 *   **Frontend Framework:** Flutter (supporting Web & Mobile platforms)
@@ -48,7 +45,7 @@ Unlike traditional applications that only allow voice typing, AeroRide features 
 *   **Map Integrations:** Google Maps Flutter SDK & Google Geocoding API
 *   **Payment Integration:** IntaSend Payment Gateway (M-Pesa STK Push & Card payments)
 
----
+
 
 ## 📂 Database Schema (Firestore Collections)
 
@@ -105,7 +102,7 @@ Routes SOS events directly to the admin.
 }
 ```
 
----
+
 
 ## 🚀 Getting Started
 
@@ -124,7 +121,7 @@ To launch the Flutter web client locally:
 flutter run -d chrome
 ```
 
----
+
 
 ## 🔒 Security Rules (`firestore.rules`)
 Firestore data is secured with strict validation rules ensuring that:
