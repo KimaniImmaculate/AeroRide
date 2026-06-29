@@ -2033,7 +2033,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
     showDialog(
       context: context,
       barrierDismissible: true,
-      builder: (context) {
+      builder: (formCtx) {
         return AlertDialog(
           backgroundColor: const Color(0xFF1A2522),
           shape: RoundedRectangleBorder(
@@ -2113,10 +2113,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                     String activeRideId =
                         currentRideId ?? data['rideId'] ?? "UNKNOWN_RIDE";
 
-                    final nav = Navigator.of(context, rootNavigator: true);
                     final scaffold = ScaffoldMessenger.of(context);
                     
-                    nav.pop(); // Close form
+                    Navigator.of(formCtx).pop(); // Close form dialog
 
                     showDialog(
                       context: context,
@@ -2133,7 +2132,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                       rideId: activeRideId,
                     );
 
-                    nav.pop(); // Dismiss loading
+                    if (context.mounted) {
+                      Navigator.of(context, rootNavigator: true).pop(); // Dismiss loading
+                    }
 
                     if (result.status == 'COMPLETED') {
                       // Mark ride as paid and record transaction reference

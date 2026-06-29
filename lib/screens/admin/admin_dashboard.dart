@@ -214,8 +214,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
           return bTime.compareTo(aTime);
         });
 
+        final double screenWidth = MediaQuery.of(context).size.width;
+        final bool isMobile = screenWidth < 600;
+
         return SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(isMobile ? 12 : 24),
           child: Center(
             child: Container(
               constraints: const BoxConstraints(maxWidth: 1200),
@@ -230,8 +233,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     platformRevenue: platformRevenue,
                     driverPayouts: driverPayouts,
                     cancellationRevenue: cancellationRevenue,
+                    isMobile: isMobile,
                   ),
-                  const SizedBox(height: 48),
+                  const SizedBox(height: 32),
                   _buildAdminRideHistoryList(allRides),
                 ],
               ),
@@ -984,6 +988,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
     required double platformRevenue,
     required double driverPayouts,
     required double cancellationRevenue,
+    required bool isMobile,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1001,16 +1006,16 @@ class _AdminDashboardState extends State<AdminDashboard> {
           ),
           color: Colors.white,
           child: Padding(
-            padding: const EdgeInsets.all(24),
+            padding: EdgeInsets.all(isMobile ? 14 : 24),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildSummaryLine("Total Dispatched Rides", totalRides.toString(), Icons.local_taxi_rounded, Colors.blue),
-                const Divider(height: 24),
-                _buildSummaryLine("Completed Trips", completedRides.toString(), Icons.check_circle_outline_rounded, Colors.green),
-                const Divider(height: 24),
-                _buildSummaryLine("Cancelled Requests", cancelledRides.toString(), Icons.cancel_outlined, Colors.red),
-                const Divider(height: 24),
+                _buildSummaryLine("Total Dispatched", totalRides.toString(), Icons.local_taxi_rounded, Colors.blue, isMobile),
+                const Divider(height: 20),
+                _buildSummaryLine("Completed Trips", completedRides.toString(), Icons.check_circle_outline_rounded, Colors.green, isMobile),
+                const Divider(height: 20),
+                _buildSummaryLine("Cancelled Requests", cancelledRides.toString(), Icons.cancel_outlined, Colors.red, isMobile),
+                const Divider(height: 20),
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
@@ -1023,18 +1028,18 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       // Header: icon + title + gross revenue
                       Row(
                         children: [
-                          Icon(Icons.payments_outlined, color: Colors.green.shade700, size: 24),
-                          const SizedBox(width: 10),
+                          Icon(Icons.payments_outlined, color: Colors.green.shade700, size: isMobile ? 20 : 24),
+                          const SizedBox(width: 8),
                           Text(
                             "Gross Revenue",
-                            style: TextStyle(fontSize: 13, color: Colors.green.shade800, fontWeight: FontWeight.bold),
+                            style: TextStyle(fontSize: isMobile ? 12 : 13, color: Colors.green.shade800, fontWeight: FontWeight.bold),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 4),
                       Text(
                         "KES ${grossRevenue.toStringAsFixed(0)}",
-                        style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: Colors.green.shade900),
+                        style: TextStyle(fontSize: isMobile ? 22 : 26, fontWeight: FontWeight.w900, color: Colors.green.shade900),
                       ),
                       const Divider(height: 20, color: Colors.green),
 
@@ -1092,18 +1097,37 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 
-  Widget _buildSummaryLine(String title, String value, IconData icon, Color iconColor) {
+  Widget _buildSummaryLine(String title, String value, IconData icon, Color iconColor, bool isMobile) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Row(
-          children: [
-            Icon(icon, color: iconColor, size: 20),
-            const SizedBox(width: 12),
-            Text(title, style: const TextStyle(fontWeight: FontWeight.w500, color: Colors.black87)),
-          ],
+        Expanded(
+          child: Row(
+            children: [
+              Icon(icon, color: iconColor, size: isMobile ? 16 : 20),
+              SizedBox(width: isMobile ? 8 : 12),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w500,
+                    color: Colors.black87,
+                    fontSize: isMobile ? 13 : 14,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
         ),
-        Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(width: 8),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: isMobile ? 16 : 18,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
       ],
     );
   }
