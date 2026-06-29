@@ -1511,11 +1511,11 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                                 builder: (context) {
                                   double displayFare = double.tryParse(data['fare'].toString()) ?? 0.0;
                                   if (currentStatus == 'cancelled') {
-                                    final tier = data['rideTier'] ?? 'tulia';
-                                    if (tier == 'tulia') displayFare = 150.0;
-                                    else if (tier == 'nuru') displayFare = 350.0;
+                                    final tier = (data['rideTier']?.toString() ?? 'tulia').trim().toLowerCase();
+                                    if (tier == 'nuru') displayFare = 350.0;
                                     else if (tier == 'pamoja') displayFare = 500.0;
                                     else if (tier == 'waziri') displayFare = 700.0;
+                                    else displayFare = 150.0;
                                   }
                                   return Text(
                                       "KES ${displayFare.toStringAsFixed(0)}",
@@ -2046,11 +2046,11 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                   builder: (context) {
                     double displayFare = double.tryParse(data['fare'].toString()) ?? 0.0;
                     if (data['status'] == 'cancelled') {
-                      final tier = data['rideTier'] ?? 'tulia';
-                      if (tier == 'tulia') displayFare = 150.0;
-                      else if (tier == 'nuru') displayFare = 350.0;
+                      final tier = (data['rideTier']?.toString() ?? 'tulia').trim().toLowerCase();
+                      if (tier == 'nuru') displayFare = 350.0;
                       else if (tier == 'pamoja') displayFare = 500.0;
                       else if (tier == 'waziri') displayFare = 700.0;
+                      else displayFare = 150.0;
                     }
                     return Text(
                       "Fare Amount: KES ${displayFare.toStringAsFixed(0)}",
@@ -2089,21 +2089,24 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                     double actualFare =
                         double.tryParse(data['fare'].toString()) ?? 1.0;
                     if (data['status'] == 'cancelled') {
-                      final tier = data['rideTier'] ?? 'tulia';
-                      if (tier == 'tulia') actualFare = 150.0;
-                      else if (tier == 'nuru') actualFare = 350.0;
+                      final tier = (data['rideTier']?.toString() ?? 'tulia').trim().toLowerCase();
+                      if (tier == 'nuru') actualFare = 350.0;
                       else if (tier == 'pamoja') actualFare = 500.0;
                       else if (tier == 'waziri') actualFare = 700.0;
+                      else actualFare = 150.0;
                     }
                     String activeRideId =
                         currentRideId ?? data['rideId'] ?? "UNKNOWN_RIDE";
 
-                    Navigator.pop(context); // Close form
+                    final nav = Navigator.of(context, rootNavigator: true);
+                    final scaffold = ScaffoldMessenger.of(context);
+                    
+                    nav.pop(); // Close form
 
                     showDialog(
                       context: context,
                       barrierDismissible: false,
-                      builder: (context) => const Center(
+                      builder: (dialogCtx) => const Center(
                           child: CircularProgressIndicator(
                               color: primaryTurquoise)),
                     );
@@ -2115,20 +2118,18 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                       rideId: activeRideId,
                     );
 
-                    if (context.mounted) {
-                      Navigator.pop(context); // Dismiss loading
-                    }
+                    nav.pop(); // Dismiss loading using the stable navigator reference
 
                     if (result == 'COMPLETED') {
                       await firestore
                           .collection('rides')
                           .doc(activeRideId)
                           .update({'paymentStatus': 'paid'});
-                      if (context.mounted) {
+                      if (mounted) {
                         setState(() {
                           currentRideId = null;
                         });
-                        ScaffoldMessenger.of(context).showSnackBar(
+                        scaffold.showSnackBar(
                           const SnackBar(
                               content: Text("✅ Payment Successful!"),
                               backgroundColor: Colors.green),
