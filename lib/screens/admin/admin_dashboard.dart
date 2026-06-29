@@ -276,8 +276,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
             Color statusColor = Colors.grey;
             if (status == 'completed') {
               statusColor = Colors.green;
-            } else if (status == 'cancelled') statusColor = Colors.red;
-            else statusColor = Colors.orange;
+            } else if (status == 'cancelled') {
+              statusColor = Colors.red;
+            } else {
+              statusColor = Colors.orange;
+            }
 
             return Card(
               elevation: 0,
@@ -398,6 +401,33 @@ class _AdminDashboardState extends State<AdminDashboard> {
                             "Cancellation Fee: KES ${data['fare']} → Driver Payout: 100% | Platform: 0%",
                             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.orange.shade800),
                           ),
+                        ),
+                      ),
+                    if (data['paymentStatus'] != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: Row(
+                          children: [
+                            Text(
+                              "Payment: ",
+                              style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                            ),
+                            Text(
+                              data['paymentStatus'].toString().toUpperCase(),
+                              style: TextStyle(
+                                color: data['paymentStatus'] == 'paid' ? Colors.green : Colors.red,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                              ),
+                            ),
+                            if (data['mpesaReference'] != null) ...[
+                              const SizedBox(width: 12),
+                              Text(
+                                "M-Pesa Ref: ${data['mpesaReference']}",
+                                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: Colors.blueGrey),
+                              ),
+                            ]
+                          ],
                         ),
                       ),
                   ],
@@ -990,49 +1020,70 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // Header: icon + title + gross revenue
                       Row(
                         children: [
-                          Icon(Icons.payments_outlined, color: Colors.green.shade700, size: 28),
-                          const SizedBox(width: 16),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text("Gross Revenue (All Payments)", style: TextStyle(fontSize: 12, color: Colors.green.shade800, fontWeight: FontWeight.bold)),
-                              const SizedBox(height: 4),
-                              Text("KES ${grossRevenue.toStringAsFixed(0)}", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.green.shade900)),
-                            ],
+                          Icon(Icons.payments_outlined, color: Colors.green.shade700, size: 24),
+                          const SizedBox(width: 10),
+                          Text(
+                            "Gross Revenue",
+                            style: TextStyle(fontSize: 13, color: Colors.green.shade800, fontWeight: FontWeight.bold),
                           ),
                         ],
                       ),
-                      const Divider(height: 24, color: Colors.green),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text("Platform Revenue (trips, 25%)", style: TextStyle(fontSize: 14, color: Colors.green.shade900, fontWeight: FontWeight.w500)),
-                          Text("KES ${platformRevenue.toStringAsFixed(0)}", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.green.shade900)),
-                        ],
+                      const SizedBox(height: 6),
+                      Text(
+                        "KES ${grossRevenue.toStringAsFixed(0)}",
+                        style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: Colors.green.shade900),
                       ),
-                      const SizedBox(height: 8),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text("Driver Payouts (trips + cancellations)", style: TextStyle(fontSize: 14, color: Colors.green.shade900, fontWeight: FontWeight.w500)),
-                          Text("KES ${driverPayouts.toStringAsFixed(0)}", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.green.shade900)),
-                        ],
+                      const Divider(height: 20, color: Colors.green),
+
+                      // Platform Revenue row
+                      _buildRevenueRow(
+                        label: "Platform Revenue",
+                        sublabel: "(trips, 25%)",
+                        value: "KES ${platformRevenue.toStringAsFixed(0)}",
+                        color: Colors.green.shade900,
                       ),
+                      const SizedBox(height: 10),
+
+                      // Driver Payouts row
+                      _buildRevenueRow(
+                        label: "Driver Payouts",
+                        sublabel: "(trips + cancellations)",
+                        value: "KES ${driverPayouts.toStringAsFixed(0)}",
+                        color: Colors.green.shade900,
+                      ),
+
+                      // Cancellation sub-line
                       if (cancellationRevenue > 0) ...[
                         const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text("  ↳ Of which, cancellation fees", style: TextStyle(fontSize: 12, color: Colors.orange.shade800, fontWeight: FontWeight.w500)),
-                            Text("KES ${cancellationRevenue.toStringAsFixed(0)}", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.orange.shade800)),
-                          ],
+                        Padding(
+                          padding: const EdgeInsets.only(left: 8),
+                          child: Row(
+                            children: [
+                              Icon(Icons.subdirectory_arrow_right_rounded, size: 14, color: Colors.orange.shade700),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Text(
+                                  "Cancellation fees",
+                                  style: TextStyle(fontSize: 12, color: Colors.orange.shade800, fontWeight: FontWeight.w500),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                "KES ${cancellationRevenue.toStringAsFixed(0)}",
+                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.orange.shade800),
+                              ),
+                            ],
+                          ),
                         ),
                       ],
                     ],
                   ),
                 ),
+
               ],
             ),
           ),
@@ -1053,6 +1104,30 @@ class _AdminDashboardState extends State<AdminDashboard> {
           ],
         ),
         Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+      ],
+    );
+  }
+
+  Widget _buildRevenueRow({
+    required String label,
+    required String sublabel,
+    required String value,
+    required Color color,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: TextStyle(fontSize: 13, color: color, fontWeight: FontWeight.w600)),
+              Text(sublabel, style: TextStyle(fontSize: 11, color: color.withValues(alpha: 0.7))),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(value, style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: color)),
       ],
     );
   }

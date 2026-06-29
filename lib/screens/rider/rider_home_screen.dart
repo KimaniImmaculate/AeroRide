@@ -1512,10 +1512,15 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                                   double displayFare = double.tryParse(data['fare'].toString()) ?? 0.0;
                                   if (currentStatus == 'cancelled') {
                                     final tier = (data['rideTier']?.toString() ?? 'tulia').trim().toLowerCase();
-                                    if (tier == 'nuru') displayFare = 350.0;
-                                    else if (tier == 'pamoja') displayFare = 500.0;
-                                    else if (tier == 'waziri') displayFare = 700.0;
-                                    else displayFare = 150.0;
+                                    if (tier == 'nuru') {
+                                      displayFare = 350.0;
+                                    } else if (tier == 'pamoja') {
+                                      displayFare = 500.0;
+                                    } else if (tier == 'waziri') {
+                                      displayFare = 700.0;
+                                    } else {
+                                      displayFare = 150.0;
+                                    }
                                   }
                                   return Text(
                                       "KES ${displayFare.toStringAsFixed(0)}",
@@ -2047,10 +2052,15 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                     double displayFare = double.tryParse(data['fare'].toString()) ?? 0.0;
                     if (data['status'] == 'cancelled') {
                       final tier = (data['rideTier']?.toString() ?? 'tulia').trim().toLowerCase();
-                      if (tier == 'nuru') displayFare = 350.0;
-                      else if (tier == 'pamoja') displayFare = 500.0;
-                      else if (tier == 'waziri') displayFare = 700.0;
-                      else displayFare = 150.0;
+                      if (tier == 'nuru') {
+                        displayFare = 350.0;
+                      } else if (tier == 'pamoja') {
+                        displayFare = 500.0;
+                      } else if (tier == 'waziri') {
+                        displayFare = 700.0;
+                      } else {
+                        displayFare = 150.0;
+                      }
                     }
                     return Text(
                       "Fare Amount: KES ${displayFare.toStringAsFixed(0)}",
@@ -2090,10 +2100,15 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                         double.tryParse(data['fare'].toString()) ?? 1.0;
                     if (data['status'] == 'cancelled') {
                       final tier = (data['rideTier']?.toString() ?? 'tulia').trim().toLowerCase();
-                      if (tier == 'nuru') actualFare = 350.0;
-                      else if (tier == 'pamoja') actualFare = 500.0;
-                      else if (tier == 'waziri') actualFare = 700.0;
-                      else actualFare = 150.0;
+                      if (tier == 'nuru') {
+                        actualFare = 350.0;
+                      } else if (tier == 'pamoja') {
+                        actualFare = 500.0;
+                      } else if (tier == 'waziri') {
+                        actualFare = 700.0;
+                      } else {
+                        actualFare = 150.0;
+                      }
                     }
                     String activeRideId =
                         currentRideId ?? data['rideId'] ?? "UNKNOWN_RIDE";
@@ -2111,7 +2126,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                               color: primaryTurquoise)),
                     );
 
-                    String result = await PaymentService.requestMpesaPrompt(
+                    MpesaPaymentResult result = await PaymentService.requestMpesaPrompt(
                       rawPhone: enteredPhone,
                       amount: actualFare,
                       context: context,
@@ -2120,12 +2135,15 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
 
                     nav.pop(); // Dismiss loading
 
-                    if (result == 'COMPLETED') {
-                      // Mark ride as paid
+                    if (result.status == 'COMPLETED') {
+                      // Mark ride as paid and record transaction reference
                       await firestore
                           .collection('rides')
                           .doc(activeRideId)
-                          .update({'paymentStatus': 'paid'});
+                          .update({
+                            'paymentStatus': 'paid',
+                            if (result.transactionCode != null) 'mpesaReference': result.transactionCode,
+                          });
 
                       // Credit 100% of cancellation fee to the assigned driver
                       // (Driver wasted time showing up — they keep the full cancellation fee)
@@ -2160,9 +2178,15 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                         );
                       }
                     } else {
+                      // Mark payment as failed in the database
+                      await firestore
+                          .collection('rides')
+                          .doc(activeRideId)
+                          .update({'paymentStatus': 'failed'});
+
                       // Payment was rejected or timed out — re-open the form so the rider can try again
                       if (mounted) {
-                        final msg = result == 'FAILED'
+                        final msg = result.status == 'FAILED'
                             ? "❌ Payment rejected. Please try again."
                             : "⏳ Payment timed out. Please try again.";
                         scaffold.showSnackBar(
@@ -2174,7 +2198,9 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                         );
                         // Re-open the payment form after a short delay
                         await Future.delayed(const Duration(milliseconds: 300));
-                        if (mounted) _showPaymentForm(context, data);
+                        if (mounted && context.mounted) {
+                          _showPaymentForm(context, data);
+                        }
                       }
                     }
                   },

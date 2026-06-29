@@ -5,10 +5,17 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:convert';
 import 'dart:async';
 
+class MpesaPaymentResult {
+  final String status; // 'COMPLETED', 'FAILED', 'TIMEOUT'
+  final String? transactionCode;
+
+  MpesaPaymentResult({required this.status, this.transactionCode});
+}
+
 class PaymentService {
   static const String _backendUrl = kIsWeb ? '/api' : 'https://aeroride-665af.web.app/api';
 
-  static Future<String> requestMpesaPrompt({
+  static Future<MpesaPaymentResult> requestMpesaPrompt({
     required String rawPhone,
     required double amount,
     required BuildContext context,
@@ -31,8 +38,8 @@ class PaymentService {
         final data = jsonDecode(response.body);
         String invoiceId = data['invoice']['invoice_id'];
 
-        // 2. Start checking the status every 3 seconds (Long polling)
-        for (int i = 0; i < 15; i++) { // Check up to 15 times
+        // 2. Start checking the status every 2 seconds (Long polling)
+        for (int i = 0; i < 5; i++) { // Check up to 5 times (10 seconds max)
           await Future.delayed(const Duration(seconds: 2));
 
           // A. Check Firestore first (fastest and most reliable if webhook succeeds)
@@ -40,7 +47,10 @@ class PaymentService {
             try {
               final doc = await FirebaseFirestore.instance.collection('rides').doc(rideId).get();
               if (doc.exists && doc.data()?['paymentStatus'] == 'paid') {
-                return 'COMPLETED';
+                return MpesaPaymentResult(
+                  status: 'COMPLETED',
+                  transactionCode: doc.data()?['mpesaReference'] as String?,
+                );
               }
             } catch (_) {}
           }
@@ -52,21 +62,23 @@ class PaymentService {
             if (statusCheck.statusCode == 200) {
               final statusData = jsonDecode(statusCheck.body);
               String state = statusData['state']; // 'PENDING', 'PROCESSING', 'COMPLETED', or 'FAILED'
+              String? mpesaReference = statusData['mpesaReference'];
 
               if (state == 'COMPLETE' || state == 'COMPLETED') {
-                return 'COMPLETED';
+                return MpesaPaymentResult(status: 'COMPLETED', transactionCode: mpesaReference);
               }
               if (state == 'FAILED' || state == 'REJECTED') {
-                return 'FAILED';
+                return MpesaPaymentResult(status: 'FAILED');
               }
             }
           } catch (_) {}
         }
-        return 'TIMEOUT';
+        return MpesaPaymentResult(status: 'TIMEOUT');
       }
-      return 'FAILED';
+      return MpesaPaymentResult(status: 'FAILED');
     } catch (e) {
-      return 'FAILED';
+      return MpesaPaymentResult(status: 'FAILED');
     }
   }
 }
+

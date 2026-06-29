@@ -605,7 +605,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                     if (!snapshot.hasData) return const SizedBox.shrink();
                     final data = snapshot.data?.data() as Map<String, dynamic>? ?? {};
                     final uploadedUrl = data['vehicleImageUrl'] as String?;
-                    final isWaziriTier = data['carTier'] == 'waziri';
 
                     return Card(
                       elevation: 0,

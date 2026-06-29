@@ -61,12 +61,16 @@ apiRouter.get('/payment-status/:invoiceId', async (req, res) => {
     try {
         let collection = intasend.collection();
         const statusResponse = await collection.status(invoiceId);
-        const state = statusResponse.invoice.state;
+        const invoice = statusResponse.invoice;
+        const state = invoice.state;
 
         console.log(`🔍 Checking Status for ${invoiceId}:`, state);
 
+        // Extract M-Pesa transaction reference (available when COMPLETE)
+        const mpesaRef = invoice.mpesa_reference || invoice.charges?.[0]?.mpesa_reference || null;
+
         if (state === 'COMPLETE' || state === 'COMPLETED') {
-            const totalPaid = statusResponse.invoice.value; 
+            const totalPaid = invoice.value; 
             
             const companyCommission = totalPaid * 0.20; 
             const driverEarnings = totalPaid - companyCommission; 
@@ -86,7 +90,7 @@ apiRouter.get('/payment-status/:invoiceId', async (req, res) => {
                     transactions: [
                         {
                             name: "AeroRide Driver Payout",
-                            account: driverPhone, // Uses the dynamically extracted profile phone
+                            account: driverPhone,
                             amount: Math.round(driverEarnings).toString(), 
                             narrative: "Trip Fare Payout"
                         }
@@ -104,12 +108,14 @@ apiRouter.get('/payment-status/:invoiceId', async (req, res) => {
             }
         }
 
-        res.status(200).json({ state: state });
+        // Return state + M-Pesa reference so Flutter can save it
+        res.status(200).json({ state: state, mpesaReference: mpesaRef });
     } catch (error) {
         console.error("❌ Grand Status Route Failure:", error.message || error);
         res.status(500).json({ error: "Failed to process payment status check pipeline" });
     }
 });
+
 
 // Mount the router under both '/api' and '/' to ensure robustness
 app.use('/api', apiRouter);
