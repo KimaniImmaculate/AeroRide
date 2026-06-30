@@ -18,24 +18,10 @@ jobs:
       - name: Build Flutter Web
         run: flutter build web --release --dart-define=GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
 
-      # Authenticates gcloud + firebase-tools using the service account JSON secret
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_AERORIDE_665AF }}
-
       - name: Deploy to Firebase Hosting
-        run: |
-          output=$(npx -y firebase-tools@latest deploy --only hosting --project aeroride-665af --non-interactive 2>&1)
-          exit_code=$?
-          echo "$output"
-          if [ $exit_code -ne 0 ]; then
-            if echo "$output" | grep -q "is the current active version"; then
-              echo "✅ No changes — current version is already live. Skipping release."
-              exit 0
-            else
-              echo "❌ Deploy failed with an unexpected error."
-              exit 1
-            fi
-          fi
-          echo "✅ Deploy successful."
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_AERORIDE_665AF }}
+          channelId: live
+          projectId: aeroride-665af
