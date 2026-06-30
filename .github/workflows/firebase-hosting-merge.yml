@@ -1,12 +1,12 @@
-# Build Flutter Web on push to main
+# Build and deploy to Firebase Hosting on push to main
 
-name: Build Flutter Web on merge
+name: Deploy to Firebase Hosting on merge
 on:
   push:
     branches:
       - main
 jobs:
-  build:
+  build_and_deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,3 +17,12 @@ jobs:
 
       - name: Build Flutter Web
         run: flutter build web --release --dart-define=GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+
+      # Authenticates gcloud + firebase-tools using the service account JSON secret
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_AERORIDE_665AF }}
+
+      - name: Deploy to Firebase Hosting
+        run: npx -y firebase-tools@latest deploy --only hosting --project aeroride-665af --non-interactive
