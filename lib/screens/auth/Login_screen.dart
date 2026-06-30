@@ -125,79 +125,87 @@ class _LoginScreenState extends State<LoginScreen> {
                         height: 1.4),
                   ),
                   const SizedBox(height: 28),
-                  // 6-box OTP input row
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: List.generate(6, (index) {
-                      return SizedBox(
-                        width: 44,
-                        height: 54,
-                        child: RawKeyboardListener(
-                          focusNode: FocusNode(),
-                          onKey: (event) {
-                            // Handle backspace: clear current and move back
-                            if (event.logicalKey.keyLabel == 'Backspace' &&
-                                digitControllers[index].text.isEmpty &&
-                                index > 0) {
-                              digitControllers[index - 1].clear();
-                              focusNodes[index - 1].requestFocus();
-                              setDialogState(() {});
-                            }
-                          },
-                          child: TextField(
-                            controller: digitControllers[index],
-                            focusNode: focusNodes[index],
-                            keyboardType: TextInputType.number,
-                            textAlign: TextAlign.center,
-                            maxLength: 1,
-                            style: GoogleFonts.urbanist(
-                              color: Colors.white,
-                              fontSize: 22,
-                              fontWeight: FontWeight.bold,
-                            ),
-                            decoration: InputDecoration(
-                              counterText: '',
-                              filled: true,
-                              fillColor: digitControllers[index].text.isNotEmpty
-                                  ? primaryTurquoise.withValues(alpha: 0.18)
-                                  : Colors.black.withValues(alpha: 0.30),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(
-                                    color: Colors.white.withValues(alpha: 0.12),
-                                    width: 1.5),
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(
-                                    color: Colors.white.withValues(alpha: 0.18),
-                                    width: 1.5),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: const BorderSide(
-                                    color: primaryTurquoise, width: 2.5),
-                              ),
-                            ),
-                            onChanged: (value) {
-                              setDialogState(() {});
-                              if (value.length == 1) {
-                                // Move to next box
-                                if (index < 5) {
-                                  focusNodes[index + 1].requestFocus();
-                                } else {
-                                  // Last box — dismiss keyboard
-                                  focusNodes[index].unfocus();
+                  // Responsive 6-box OTP row — scales to any screen width
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      // Available width split equally across 6 boxes with 6px gaps
+                      final double boxWidth =
+                          ((constraints.maxWidth - 5 * 6) / 6).clamp(32.0, 50.0);
+                      final double boxHeight = (boxWidth * 1.25).clamp(42.0, 62.0);
+                      final double fontSize = (boxWidth * 0.48).clamp(16.0, 24.0);
+
+                      return Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: List.generate(6, (index) {
+                          return SizedBox(
+                            width: boxWidth,
+                            height: boxHeight,
+                            child: RawKeyboardListener(
+                              focusNode: FocusNode(),
+                              onKey: (event) {
+                                // Handle backspace: clear current and move back
+                                if (event.logicalKey.keyLabel == 'Backspace' &&
+                                    digitControllers[index].text.isEmpty &&
+                                    index > 0) {
+                                  digitControllers[index - 1].clear();
+                                  focusNodes[index - 1].requestFocus();
+                                  setDialogState(() {});
                                 }
-                              } else if (value.isEmpty && index > 0) {
-                                // Moved back on delete
-                                focusNodes[index - 1].requestFocus();
-                              }
-                            },
-                          ),
-                        ),
+                              },
+                              child: TextField(
+                                controller: digitControllers[index],
+                                focusNode: focusNodes[index],
+                                keyboardType: TextInputType.number,
+                                textAlign: TextAlign.center,
+                                maxLength: 1,
+                                style: GoogleFonts.urbanist(
+                                  color: Colors.white,
+                                  fontSize: fontSize,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                decoration: InputDecoration(
+                                  counterText: '',
+                                  filled: true,
+                                  fillColor: digitControllers[index].text.isNotEmpty
+                                      ? primaryTurquoise.withValues(alpha: 0.18)
+                                      : Colors.black.withValues(alpha: 0.30),
+                                  contentPadding: EdgeInsets.zero,
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: BorderSide(
+                                        color: Colors.white.withValues(alpha: 0.12),
+                                        width: 1.5),
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: BorderSide(
+                                        color: Colors.white.withValues(alpha: 0.18),
+                                        width: 1.5),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: const BorderSide(
+                                        color: primaryTurquoise, width: 2.5),
+                                  ),
+                                ),
+                                onChanged: (value) {
+                                  setDialogState(() {});
+                                  if (value.length == 1) {
+                                    if (index < 5) {
+                                      focusNodes[index + 1].requestFocus();
+                                    } else {
+                                      focusNodes[index].unfocus();
+                                    }
+                                  } else if (value.isEmpty && index > 0) {
+                                    focusNodes[index - 1].requestFocus();
+                                  }
+                                },
+                              ),
+                            ),
+                          );
+                        }),
                       );
-                    }),
+                    },
                   ),
                   const SizedBox(height: 10),
                 ],
