@@ -1,15 +1,20 @@
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'services/ride_service.dart'; // ⚡ FIXED: Direct path to your integrated state & service engine
 import 'gateway_portal.dart';
 
 class VehicleSelectionScreen extends StatefulWidget {
-  final User user;
   final double distanceKm;
-  const VehicleSelectionScreen({super.key, required this.user, required this.distanceKm});
+  final String pickupName;
+  final String destinationName;
+  const VehicleSelectionScreen({
+    super.key,
+    required this.distanceKm,
+    required this.pickupName,
+    required this.destinationName,
+  });
 
   @override
   State<VehicleSelectionScreen> createState() => _VehicleSelectionScreenState();
@@ -27,6 +32,8 @@ class _VehicleSelectionScreenState extends State<VehicleSelectionScreen> {
     Provider.of<RideController>(context, listen: false)
         .selectTier(_selectedTier!);
 
+    final double fare = _selectedTier!.baseFare + (widget.distanceKm * _selectedTier!.perKmRate);
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -42,9 +49,14 @@ class _VehicleSelectionScreenState extends State<VehicleSelectionScreen> {
             );
           },
           child: AlertDialog(
-            backgroundColor: Colors.white,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            backgroundColor: const Color(0xFF1A2522),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+              side: BorderSide(
+                color: Colors.white.withValues(alpha: 0.12),
+                width: 1,
+              ),
+            ),
             contentPadding: const EdgeInsets.all(24),
             content: Column(
               mainAxisSize: MainAxisSize.min,
@@ -55,46 +67,123 @@ class _VehicleSelectionScreenState extends State<VehicleSelectionScreen> {
                     color: primaryTurquoise.withValues(alpha: 0.1),
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.auto_awesome_rounded,
+                  child: const Icon(Icons.confirmation_num_rounded,
                       color: primaryTurquoise, size: 36),
                 ),
                 const SizedBox(height: 20),
                 Text(
-                  "RIDE INITIALIZED",
+                  "CONFIRM YOUR SELECTION",
+                  textAlign: TextAlign.center,
                   style: GoogleFonts.urbanist(
                       fontWeight: FontWeight.w900,
                       fontSize: 18,
+                      color: Colors.white,
                       letterSpacing: 1.0),
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  "Your Premium ${_selectedTier!.name} atmosphere configuration is locked in and ready.",
+                const SizedBox(height: 16),
+                RichText(
                   textAlign: TextAlign.center,
-                  style: GoogleFonts.urbanist(
-                      color: Colors.black54,
+                  text: TextSpan(
+                    style: GoogleFonts.urbanist(
+                      color: Colors.white70,
                       fontSize: 14,
-                      fontWeight: FontWeight.w500),
-                ),
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: ElevatedButton(
-                    onPressed: () {
-                      Navigator.of(context)
-                          .pop(); // Clear out the dialog bubble frame overlay
-                      Navigator.of(context)
-                          .pop(true); // Back out safely returning true
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: primaryTurquoise,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14)),
+                      fontWeight: FontWeight.w500,
+                      height: 1.5,
                     ),
-                    child: Text("LET'S ROLL",
-                        style: GoogleFonts.urbanist(
-                            fontWeight: FontWeight.w800, color: Colors.white)),
+                    children: [
+                      const TextSpan(text: "Are you comfortable with the selected "),
+                      TextSpan(
+                        text: _selectedTier!.name,
+                        style: const TextStyle(
+                          color: primaryTurquoise,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const TextSpan(text: " tier from "),
+                      TextSpan(
+                        text: widget.pickupName,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const TextSpan(text: " to "),
+                      TextSpan(
+                        text: widget.destinationName,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const TextSpan(text: " with a total estimated fare of "),
+                      TextSpan(
+                        text: "KES ${fare.toStringAsFixed(0)}",
+                        style: const TextStyle(
+                          color: primaryTurquoise,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const TextSpan(text: "?"),
+                    ],
                   ),
+                ),
+                const SizedBox(height: 28),
+                Row(
+                  children: [
+                    Expanded(
+                      child: SizedBox(
+                        height: 50,
+                        child: OutlinedButton(
+                          onPressed: () {
+                            Navigator.of(context).pop(); // pop dialog
+                            Navigator.of(context).pop(false); // pop screen back to map with false
+                          },
+                          style: OutlinedButton.styleFrom(
+                            side: BorderSide(
+                              color: Colors.redAccent.withValues(alpha: 0.8),
+                              width: 1.5,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          child: Text(
+                            "NO, REJECT",
+                            style: GoogleFonts.urbanist(
+                              fontWeight: FontWeight.w800,
+                              color: Colors.redAccent,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: SizedBox(
+                        height: 50,
+                        child: ElevatedButton(
+                          onPressed: () {
+                            Navigator.of(context).pop(); // pop dialog
+                            Navigator.of(context).pop(true); // pop screen back with approval
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: primaryTurquoise,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          child: Text(
+                            "YES, PROCEED",
+                            style: GoogleFonts.urbanist(
+                              fontWeight: FontWeight.w800,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),

@@ -696,32 +696,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
       dev.log("RIDER_LOG: Fatal exception in _updateRouteUI", error: e);
     }
   }
-
   Future<void> requestRide({String? voiceTier, String? voiceNotes}) async {
-    // --- AUTHENTICATION GATE ---
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null || currentUser.isAnonymous) {
-      dev.log(
-          "RIDER_LOG: Anonymous user attempting to book. Redirecting to login.");
-      if (!mounted) return;
-
-      // Navigate to the login screen and wait for a result.
-      final bool? loginSuccess = await Navigator.push<bool>(
-        context,
-        MaterialPageRoute(builder: (context) => const LoginScreen()),
-      );
-
-      // If login was successful, the user is now authenticated.
-      // We can refresh the state and proceed with the original request.
-      if (loginSuccess != true) {
-        dev.log("RIDER_LOG: Login was not successful. Aborting ride request.");
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Please log in to request a ride.")),
-        );
-        return;
-      }
-    }
-
     if (pickupLocation == null || destinationLocation == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -751,14 +726,19 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
         context,
         MaterialPageRoute(
           builder: (context) => VehicleSelectionScreen(
-            user: FirebaseAuth.instance.currentUser!,
             distanceKm: distanceKm,
+            pickupName: pickupController.text.trim().isEmpty
+                ? "Current Location"
+                : pickupController.text.trim(),
+            destinationName: destinationController.text.trim().isEmpty
+                ? "Selected Destination"
+                : destinationController.text.trim(),
           ),
         ),
       );
 
       if (confirmed != true) {
-        dev.log("RIDER_LOG: Vehicle selection cancelled by user.");
+        dev.log("RIDER_LOG: Vehicle selection cancelled or rejected by user.");
         return;
       }
 
@@ -782,6 +762,30 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
         fare = 350 + (distanceKm * 80);
       } else {
         fare = 150 + (distanceKm * 45); // tulia
+      }
+    }
+
+    // --- AUTHENTICATION GATE ---
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null || currentUser.isAnonymous) {
+      dev.log(
+          "RIDER_LOG: Anonymous user attempting to book. Redirecting to login.");
+      if (!mounted) return;
+
+      // Navigate to the login screen and wait for a result.
+      final bool? loginSuccess = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(builder: (context) => const LoginScreen()),
+      );
+
+      // If login was successful, the user is now authenticated.
+      // We can refresh the state and proceed with the original request.
+      if (loginSuccess != true) {
+        dev.log("RIDER_LOG: Login was not successful. Aborting ride request.");
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Please log in to request a ride.")),
+        );
+        return;
       }
     }
 
