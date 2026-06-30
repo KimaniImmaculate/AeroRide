@@ -105,6 +105,14 @@ service cloud.firestore {
         );
 
       allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if signedIn() && isRideParticipant(get(/databases/$(database)/documents/rides/$(rideId)).data);
+        allow create: if signedIn()
+          && isRideParticipant(get(/databases/$(database)/documents/rides/$(rideId)).data)
+          && request.resource.data.senderId == request.auth.uid;
+        allow update, delete: if false;
+      }
     }
 
     match /ride_requests/{rideId} {

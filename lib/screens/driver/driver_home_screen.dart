@@ -541,7 +541,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                               title: "Your Earnings",
                               value: "KES $earnings",
                               subtitle: "Total trips: $totalTrips • Commission: 75%\nRating: ${rating.toStringAsFixed(1)} ⭐ ($totalRatings reviews)",
-                              backgroundColor: Colors.blue.shade50.withOpacity(0.5),
+                              backgroundColor: Colors.blue.shade50.withValues(alpha: 0.5),
                               accentColor: Colors.blue.shade700,
                               icon: Icons.account_balance_wallet_outlined,
                             );
@@ -582,7 +582,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                       title: "AeroRide Telemetry Status",
                                       value: "$onlineDrivers Active Drivers",
                                       subtitle: "$pendingRides rides awaiting dispatch • $ongoingRides running trips",
-                                      backgroundColor: Colors.green.shade50.withOpacity(0.5),
+                                      backgroundColor: Colors.green.shade50.withValues(alpha: 0.5),
                                       accentColor: Colors.green.shade700,
                                       icon: Icons.language_rounded,
                                     );
@@ -841,7 +841,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                             Container(
                                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                                               decoration: BoxDecoration(
-                                                color: _getStatusColor(data['status']).withOpacity(0.1),
+                                                color: _getStatusColor(data['status']).withValues(alpha: 0.1),
                                                 borderRadius: BorderRadius.circular(30),
                                               ),
                                               child: Text(
@@ -852,7 +852,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                             Container(
                                               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                                               decoration: BoxDecoration(
-                                                color: const Color(0xFF16a085).withOpacity(0.1),
+                                                color: const Color(0xFF16a085).withValues(alpha: 0.1),
                                                 borderRadius: BorderRadius.circular(30),
                                               ),
                                               child: Text(
