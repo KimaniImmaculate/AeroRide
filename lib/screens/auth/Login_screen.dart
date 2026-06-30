@@ -341,6 +341,16 @@ class _LoginScreenState extends State<LoginScreen> {
           // Fallback: no 2FA phone on profile — route directly by role.
           setState(() => isLoading = false);
           if (!mounted) return;
+          // Hide recaptcha badge on the direct routing path too
+          if (kIsWeb) {
+            try {
+              if (globalContext.has('aerorideHideRecaptcha')) {
+                globalContext.callMethod('aerorideHideRecaptcha'.toJS);
+              }
+            } catch (e) {
+              debugPrint("Error hiding recaptcha (fallback path): $e");
+            }
+          }
           // isRiderSubFlow=true: if a rider was already on the Rider Dashboard
           // (anonymous) and the login was triggered by requestRide(), we pop
           // back so the coordinates they entered are preserved.

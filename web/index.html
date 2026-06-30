@@ -122,6 +122,11 @@
       if (container) {
         container.style.display = 'none';
       }
+      // Also hide Google's injected badge element
+      document.querySelectorAll('.grecaptcha-badge').forEach(function(el) {
+        el.style.visibility = 'hidden';
+        el.style.opacity = '0';
+      });
     };
   </script>
   <style>
