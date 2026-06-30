@@ -92,8 +92,8 @@ service cloud.firestore {
         && (
           (isRideRider(resource.data) && (request.resource.data.paymentStatus == 'paid' || request.resource.data.status == 'completed')) ||
           
-          // Allow field updates for the dynamic OTP generation rules
-          request.resource.data.keys().hasAny(['otp', 'pinCode']) ||
+          // Allow field updates for the dynamic OTP generation rules and chat counters
+          request.resource.data.keys().hasAny(['otp', 'pinCode', 'unreadRiderCount', 'unreadDriverCount']) ||
           
           (
             isValidStatusTransition(resource.data.status, request.resource.data.status)

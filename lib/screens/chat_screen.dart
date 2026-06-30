@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -18,25 +19,104 @@ class _ChatScreenState extends State<ChatScreen> {
   final FirebaseFirestore firestore = FirebaseFirestore.instance;
   final TextEditingController messageController = TextEditingController();
   final String? currentUid = FirebaseAuth.instance.currentUser?.uid;
+  StreamSubscription? _messagesSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _resetUnreadCount();
+    
+    // Reset unread count whenever the messages collection updates
+    _messagesSubscription = firestore
+        .collection('rides')
+        .doc(widget.rideId)
+        .collection('messages')
+        .snapshots()
+        .listen((_) {
+      _resetUnreadCount();
+    });
+  }
+
+  @override
+  void dispose() {
+    _messagesSubscription?.cancel();
+    messageController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _resetUnreadCount() async {
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return;
+
+      final rideDoc = await firestore.collection('rides').doc(widget.rideId).get();
+      if (!rideDoc.exists) return;
+      final rideData = rideDoc.data();
+      if (rideData == null) return;
+
+      bool isRider = currentUser.uid == rideData['riderId'];
+      if (isRider) {
+        await firestore.collection('rides').doc(widget.rideId).update({
+          'unreadRiderCount': 0,
+        });
+      } else {
+        await firestore.collection('rides').doc(widget.rideId).update({
+          'unreadDriverCount': 0,
+        });
+      }
+    } catch (e) {
+      debugPrint("Error resetting unread count: $e");
+    }
+  }
 
   Future<void> sendMessage() async {
     String text = messageController.text.trim();
     if (text.isEmpty) return;
 
     final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
 
-    await firestore
-        .collection('rides')
-        .doc(widget.rideId)
-        .collection('messages')
-        .add({
-      'message': text,
-      'senderId': currentUser?.uid ?? 'ANONYMOUS',
-      'senderEmail': currentUser?.email ?? 'anonymous@aeroride.com',
-      'createdAt': FieldValue.serverTimestamp(), // Better than Timestamp.now() for live sync!
-    });
+    try {
+      // 1. Fetch ride details to check roles
+      final rideDoc = await firestore.collection('rides').doc(widget.rideId).get();
+      if (!rideDoc.exists) return;
+      final rideData = rideDoc.data();
+      if (rideData == null) return;
 
-    messageController.clear();
+      bool isRider = currentUser.uid == rideData['riderId'];
+
+      // 2. Perform write in a batch for atomicity
+      final batch = firestore.batch();
+      
+      final messageRef = firestore
+          .collection('rides')
+          .doc(widget.rideId)
+          .collection('messages')
+          .doc();
+
+      batch.set(messageRef, {
+        'message': text,
+        'senderId': currentUser.uid,
+        'senderEmail': currentUser.email ?? 'anonymous@aeroride.com',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      final rideRef = firestore.collection('rides').doc(widget.rideId);
+      if (isRider) {
+        batch.update(rideRef, {
+          'unreadDriverCount': FieldValue.increment(1),
+        });
+      } else {
+        batch.update(rideRef, {
+          'unreadRiderCount': FieldValue.increment(1),
+        });
+      }
+
+      await batch.commit();
+      messageController.clear();
+    } catch (e) {
+      debugPrint("Error sending message: $e");
+    }
   }
 
   @override

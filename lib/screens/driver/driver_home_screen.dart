@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
@@ -149,6 +152,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           if (mounted) {
             final title = message.notification?.title ?? 'New Notification';
             final body = message.notification?.body ?? '';
+
+            // Play double-tone notification ping sound on Web
+            if (kIsWeb) {
+              try {
+                if (globalContext.has('aeroridePlayPing')) {
+                  globalContext.callMethod('aeroridePlayPing'.toJS);
+                }
+              } catch (e) {
+                debugPrint("Error playing ping sound: $e");
+              }
+            }
+
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Column(
@@ -991,18 +1006,23 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                                         final iconButtons = Row(
                                           mainAxisSize: MainAxisSize.min,
                                           children: [
-                                            IconButton(
-                                              style: IconButton.styleFrom(
-                                                backgroundColor: Colors.grey.shade100,
-                                                foregroundColor: Colors.grey.shade700,
-                                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                                padding: const EdgeInsets.all(14),
+                                            Badge(
+                                              isLabelVisible: (data['unreadDriverCount'] ?? 0) > 0,
+                                              label: Text((data['unreadDriverCount'] ?? 0).toString()),
+                                              backgroundColor: Colors.red,
+                                              child: IconButton(
+                                                style: IconButton.styleFrom(
+                                                  backgroundColor: Colors.grey.shade100,
+                                                  foregroundColor: Colors.grey.shade700,
+                                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                                  padding: const EdgeInsets.all(14),
+                                                ),
+                                                onPressed: () {
+                                                  Navigator.push(context, MaterialPageRoute(builder: (_) => ChatScreen(rideId: ride.id)));
+                                                },
+                                                icon: const Icon(Icons.chat_bubble_outline_rounded, size: 20),
+                                                tooltip: "Message Rider",
                                               ),
-                                              onPressed: () {
-                                                Navigator.push(context, MaterialPageRoute(builder: (_) => ChatScreen(rideId: ride.id)));
-                                              },
-                                              icon: const Icon(Icons.chat_bubble_outline_rounded, size: 20),
-                                              tooltip: "Message Rider",
                                             ),
                                             const SizedBox(width: 8),
                                             IconButton(
@@ -2228,8 +2248,25 @@ if (ride['status'] != 'completed')
           );
         },
 
-        child: const Text(
-          "Chat",
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Text("Chat"),
+            if ((ride['unreadDriverCount'] ?? 0) > 0) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: const BoxDecoration(
+                  color: Colors.red,
+                  borderRadius: BorderRadius.all(Radius.circular(10)),
+                ),
+                child: Text(
+                  ride['unreadDriverCount'].toString(),
+                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ]
+          ],
         ),
       ),
     ),

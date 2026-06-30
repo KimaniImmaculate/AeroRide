@@ -82,14 +82,66 @@
         window.speechSynthesis.cancel(); // cancel any active speech
         const utterance = new SpeechSynthesisUtterance(text);
         window.speechSynthesis.speak(utterance);
-      } else {
-        console.warn("[Aeroride TTS] Speech synthesis is not supported on this browser.");
+      }
+    };
+
+    // Notification Chime Sound (Ping)
+    window.aeroridePlayPing = function() {
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        const ctx = new AudioContext();
+        
+        const playTone = (freq, startTime, duration) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, startTime);
+          
+          gain.gain.setValueAtTime(0.3, startTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+          
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          
+          osc.start(startTime);
+          osc.stop(startTime + duration);
+        };
+        
+        const now = ctx.currentTime;
+        playTone(880, now, 0.15); // A5 tone
+        playTone(1046.5, now + 0.08, 0.25); // C6 tone
+      } catch (e) {
+        console.error("Failed to play ping sound", e);
+      }
+    };
+
+    window.aerorideHideRecaptcha = function() {
+      const container = document.getElementById('recaptcha-container');
+      if (container) {
+        container.style.display = 'none';
       }
     };
   </script>
+  <style>
+    #recaptcha-container {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 999999;
+      background-color: white;
+      border-radius: 4px;
+      box-shadow: 0px 4px 10px rgba(0,0,0,0.2);
+    }
+    #recaptcha-container:empty {
+      display: none !important;
+    }
+  </style>
 </head>
 <body>
-  <div id="recaptcha-container" style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 999999; background-color: white; border-radius: 4px; box-shadow: 0px 4px 10px rgba(0,0,0,0.2);"></div>  
+  <div id="recaptcha-container"></div>  
 
   <script src="flutter_bootstrap.js" async></script>
 </body>

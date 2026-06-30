@@ -1,3 +1,6 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 import 'register_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -186,6 +189,17 @@ class _LoginScreenState extends State<LoginScreen> {
 
                   if (!mounted) return;
                   Navigator.pop(context); // Close dialog
+
+                  // Hide recaptcha widget after successful verification on Web
+                  if (kIsWeb) {
+                    try {
+                      if (globalContext.has('aerorideHideRecaptcha')) {
+                        globalContext.callMethod('aerorideHideRecaptcha'.toJS);
+                      }
+                    } catch (e) {
+                      debugPrint("Error hiding recaptcha: $e");
+                    }
+                  }
 
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(

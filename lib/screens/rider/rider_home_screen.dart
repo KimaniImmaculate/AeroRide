@@ -1302,8 +1302,13 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                           builder: (_) => ChatScreen(rideId: currentRideId!)),
                     ),
                     backgroundColor: primaryTurquoise,
-                    icon: const Icon(Icons.chat_bubble_rounded,
-                        color: Colors.white),
+                    icon: Badge(
+                      isLabelVisible: (data['unreadRiderCount'] ?? 0) > 0,
+                      label: Text((data['unreadRiderCount'] ?? 0).toString()),
+                      backgroundColor: Colors.red,
+                      child: const Icon(Icons.chat_bubble_rounded,
+                          color: Colors.white),
+                    ),
                     label: Text("Chat",
                         style: GoogleFonts.urbanist(
                             fontWeight: FontWeight.bold, color: Colors.white)),
