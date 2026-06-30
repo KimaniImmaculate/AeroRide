@@ -2048,9 +2048,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                     child: isLoading
                         ? const CircularProgressIndicator(color: Colors.white)
                         : Text(
-                            isGuest
-                                ? "Login to Request Ride"
-                                : "Confirm & Request Your Ride",
+                            "Choose Ride & View Fare",
                             style: GoogleFonts.urbanist(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
