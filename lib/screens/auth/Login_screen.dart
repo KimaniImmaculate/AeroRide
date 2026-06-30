@@ -76,156 +76,230 @@ class _LoginScreenState extends State<LoginScreen> {
 
   // 🌟 Enforces verification challenge UI before dashboard access routing
   void show2FaOtpDialog(String verificationId, String role) {
-    final TextEditingController otpController = TextEditingController();
+    // 6 individual controllers and focus nodes for the OTP boxes
+    final List<TextEditingController> digitControllers =
+        List.generate(6, (_) => TextEditingController());
+    final List<FocusNode> focusNodes =
+        List.generate(6, (_) => FocusNode());
 
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1A2522),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
-            side: BorderSide(
-                color: Colors.white.withValues(alpha: 0.12), width: 1),
-          ),
-          title: Row(
-            children: [
-              const Icon(Icons.security_rounded,
-                  color: primaryTurquoise, size: 28),
-              const SizedBox(width: 12),
-              Text(
-                "Two-Factor Auth",
-                style: GoogleFonts.urbanist(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 22,
-                    color: Colors.white),
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            // Assemble the full code from all 6 boxes
+            String getOtpCode() =>
+                digitControllers.map((c) => c.text).join();
+
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1A2522),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(24),
+                side: BorderSide(
+                    color: Colors.white.withValues(alpha: 0.12), width: 1),
               ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                "A secure verification code has been dispatched to your registered phone number. Enter it below to proceed.",
-                style: GoogleFonts.urbanist(
-                    fontSize: 14,
-                    color: Colors.white.withValues(alpha: 0.65),
-                    height: 1.4),
+              title: Row(
+                children: [
+                  const Icon(Icons.security_rounded,
+                      color: primaryTurquoise, size: 28),
+                  const SizedBox(width: 12),
+                  Text(
+                    "Two-Factor Auth",
+                    style: GoogleFonts.urbanist(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 22,
+                        color: Colors.white),
+                  ),
+                ],
               ),
-              const SizedBox(height: 20),
-              TextField(
-                controller: otpController,
-                keyboardType: TextInputType.number,
-                maxLength: 6,
-                style: GoogleFonts.urbanist(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: "6-Digit Code",
-                  labelStyle:
-                      TextStyle(color: Colors.white.withValues(alpha: 0.5)),
-                  prefixIcon:
-                      const Icon(Icons.pin_outlined, color: primaryTurquoise),
-                  filled: true,
-                  fillColor: Colors.black.withValues(alpha: 0.25),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide:
-                        BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text(
+                    "A secure verification code has been dispatched to your registered phone number. Enter it below to proceed.",
+                    style: GoogleFonts.urbanist(
+                        fontSize: 14,
+                        color: Colors.white.withValues(alpha: 0.65),
+                        height: 1.4),
                   ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide:
-                        BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+                  const SizedBox(height: 28),
+                  // 6-box OTP input row
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: List.generate(6, (index) {
+                      return SizedBox(
+                        width: 44,
+                        height: 54,
+                        child: RawKeyboardListener(
+                          focusNode: FocusNode(),
+                          onKey: (event) {
+                            // Handle backspace: clear current and move back
+                            if (event.logicalKey.keyLabel == 'Backspace' &&
+                                digitControllers[index].text.isEmpty &&
+                                index > 0) {
+                              digitControllers[index - 1].clear();
+                              focusNodes[index - 1].requestFocus();
+                              setDialogState(() {});
+                            }
+                          },
+                          child: TextField(
+                            controller: digitControllers[index],
+                            focusNode: focusNodes[index],
+                            keyboardType: TextInputType.number,
+                            textAlign: TextAlign.center,
+                            maxLength: 1,
+                            style: GoogleFonts.urbanist(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            decoration: InputDecoration(
+                              counterText: '',
+                              filled: true,
+                              fillColor: digitControllers[index].text.isNotEmpty
+                                  ? primaryTurquoise.withValues(alpha: 0.18)
+                                  : Colors.black.withValues(alpha: 0.30),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide(
+                                    color: Colors.white.withValues(alpha: 0.12),
+                                    width: 1.5),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide(
+                                    color: Colors.white.withValues(alpha: 0.18),
+                                    width: 1.5),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: const BorderSide(
+                                    color: primaryTurquoise, width: 2.5),
+                              ),
+                            ),
+                            onChanged: (value) {
+                              setDialogState(() {});
+                              if (value.length == 1) {
+                                // Move to next box
+                                if (index < 5) {
+                                  focusNodes[index + 1].requestFocus();
+                                } else {
+                                  // Last box — dismiss keyboard
+                                  focusNodes[index].unfocus();
+                                }
+                              } else if (value.isEmpty && index > 0) {
+                                // Moved back on delete
+                                focusNodes[index - 1].requestFocus();
+                              }
+                            },
+                          ),
+                        ),
+                      );
+                    }),
                   ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide:
-                        const BorderSide(color: primaryTurquoise, width: 2),
-                  ),
+                  const SizedBox(height: 10),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    setState(() {
+                      isLoading = false;
+                    });
+                  },
+                  child: Text("Cancel",
+                      style: GoogleFonts.urbanist(
+                          color: Colors.white.withValues(alpha: 0.6),
+                          fontWeight: FontWeight.w600)),
                 ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                setState(() {
-                  isLoading = false;
-                });
-              },
-              child: Text("Cancel",
-                  style: GoogleFonts.urbanist(
-                      color: Colors.white.withValues(alpha: 0.6),
-                      fontWeight: FontWeight.w600)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: primaryTurquoise,
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              ),
-              onPressed: () async {
-                try {
-                  PhoneAuthCredential credential = PhoneAuthProvider.credential(
-                    verificationId: verificationId,
-                    smsCode: otpController.text.trim(),
-                  );
-
-                  // Complete the verification block check by linking the credential to the current user session
-                  try {
-                    await FirebaseAuth.instance.currentUser?.linkWithCredential(credential);
-                  } on FirebaseAuthException catch (linkError) {
-                    if (linkError.code != 'provider-already-linked' &&
-                        linkError.code != 'credential-already-in-use' &&
-                        linkError.code != 'account-exists-with-different-credential') {
-                      rethrow;
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: primaryTurquoise,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  ),
+                  onPressed: () async {
+                    final smsCode = getOtpCode();
+                    if (smsCode.length < 6) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          backgroundColor: Colors.orange.shade700,
+                          content: Text(
+                            "Please fill in all 6 digits.",
+                            style: GoogleFonts.urbanist(color: Colors.white),
+                          ),
+                        ),
+                      );
+                      return;
                     }
-                  }
-
-                  if (!mounted) return;
-                  Navigator.pop(context); // Close dialog
-
-                  // Hide recaptcha widget after successful verification on Web
-                  if (kIsWeb) {
                     try {
-                      if (globalContext.has('aerorideHideRecaptcha')) {
-                        globalContext.callMethod('aerorideHideRecaptcha'.toJS);
+                      PhoneAuthCredential credential =
+                          PhoneAuthProvider.credential(
+                        verificationId: verificationId,
+                        smsCode: smsCode,
+                      );
+
+                      // Complete the verification block check by linking the credential to the current user session
+                      try {
+                        await FirebaseAuth.instance.currentUser
+                            ?.linkWithCredential(credential);
+                      } on FirebaseAuthException catch (linkError) {
+                        if (linkError.code != 'provider-already-linked' &&
+                            linkError.code != 'credential-already-in-use' &&
+                            linkError.code !=
+                                'account-exists-with-different-credential') {
+                          rethrow;
+                        }
                       }
+
+                      if (!mounted) return;
+                      Navigator.pop(context); // Close dialog
+
+                      // Hide recaptcha widget after successful verification on Web
+                      if (kIsWeb) {
+                        try {
+                          if (globalContext.has('aerorideHideRecaptcha')) {
+                            globalContext
+                                .callMethod('aerorideHideRecaptcha'.toJS);
+                          }
+                        } catch (e) {
+                          debugPrint("Error hiding recaptcha: $e");
+                        }
+                      }
+
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text("Login Successful"),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+
+                      // Route based on role after 2FA verified.
+                      _navigateByRole(role, isRiderSubFlow: true);
                     } catch (e) {
-                      debugPrint("Error hiding recaptcha: $e");
+                      debugPrint("OTP Verification Error: $e");
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                            backgroundColor: Colors.red,
+                            content: Text("Error: $e",
+                                style:
+                                    GoogleFonts.urbanist(color: Colors.white))),
+                      );
                     }
-                  }
-
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text("Login Successful"),
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-
-                  // Route based on role after 2FA verified.
-                  _navigateByRole(role, isRiderSubFlow: true);
-                } catch (e) {
-                  debugPrint("OTP Verification Error: $e");
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                        backgroundColor: Colors.red,
-                        content: Text(
-                            "Error: $e",
-                            style: GoogleFonts.urbanist(color: Colors.white))),
-                  );
-                }
-              },
-              child: Text("Verify & Enter",
-                  style: GoogleFonts.urbanist(
-                      color: Colors.white, fontWeight: FontWeight.bold)),
-            ),
-          ],
+                  },
+                  child: Text("Verify & Enter",
+                      style: GoogleFonts.urbanist(
+                          color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            );
+          },
         );
       },
     );

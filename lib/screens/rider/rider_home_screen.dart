@@ -696,6 +696,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
       dev.log("RIDER_LOG: Fatal exception in _updateRouteUI", error: e);
     }
   }
+
   Future<void> requestRide({String? voiceTier, String? voiceNotes}) async {
     if (pickupLocation == null || destinationLocation == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2047,8 +2048,7 @@ class _RiderHomeScreenState extends State<RiderHomeScreen> {
                     ),
                     child: isLoading
                         ? const CircularProgressIndicator(color: Colors.white)
-                        : Text(
-                            "Choose Ride & View Fare",
+                        : Text("Choose Ride & View Fare",
                             style: GoogleFonts.urbanist(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
